@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Virtual env / package managers
+.venv/
+venv/
+.env/
+.uv/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project local state
+.codegraph
+.omo/
+results/
+review_queue.jsonl
+review_prompts.jsonl
+
+# Local config with secrets (keep example)
+config/test.yaml
+
+# Archives / backups
+*.zip
+*.tar.gz
