@@ -18,6 +18,8 @@ from src.metrics_retrieval import (  # noqa: E402
     reciprocal_rank,
 )
 from src.models import GoldenItem, RetrievedChunk  # noqa: E402
+from src.report import build_report  # noqa: E402
+from src.runner import dataset_fingerprint  # noqa: E402
 
 
 def mk(chunks):
@@ -78,3 +80,28 @@ def test_percentile():
     assert percentile([1, 2, 3, 4], 50) == 2.5
     assert percentile([5], 95) == 5.0
     assert percentile([], 50) is None
+
+
+def test_dataset_fingerprint(tmp_path):
+    import hashlib
+
+    p = tmp_path / "golden.jsonl"
+    p.write_text('{"question_id": "Q1"}\n', encoding="utf-8")
+    fp = dataset_fingerprint(str(p), [{"question_id": "Q1"}])
+    assert fp["path"] == str(p)
+    assert fp["n_items"] == 1
+    assert fp["sha256"] == hashlib.sha256(p.read_bytes()).hexdigest()
+    assert isinstance(fp["mtime"], float)
+
+
+def test_build_report_dataset_passthrough():
+    from src.metrics_generation import latency_stats
+
+    rep = build_report([], latency_stats([]), True)
+    assert rep["n_questions"] == 0
+    assert rep["dataset"] is None  # 老调用方式兼容
+    ds = {"path": "d.jsonl", "sha256": "abc", "n_items": 6, "mtime": 1.0}
+    rep2 = build_report([], latency_stats([]), True, dataset_info=ds,
+                        retrieval_config={"top_k": 1024})
+    assert rep2["dataset"] == ds
+    assert rep2["retrieval"] == {"top_k": 1024}

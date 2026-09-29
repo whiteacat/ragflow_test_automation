@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -32,6 +33,24 @@ def load_golden(path: str, limit=None) -> List[Dict[str, Any]]:
     return items[:limit] if limit else items
 
 
+def dataset_fingerprint(path: str, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """数据集指纹：用于追溯某次运行结果出自哪版 golden 数据。
+
+    记录文件级 sha256（内容变更即变）+ 实际载入题数 + mtime，
+    写入 summary.json；行级题干快照见 per_question 的 question 字段。
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return {
+        "path": path,
+        "sha256": h.hexdigest(),
+        "n_items": len(items),
+        "mtime": os.path.getmtime(path),
+    }
+
+
 def run(cfg_path: str) -> Dict[str, Any]:
     cfg = load_config(cfg_path)
     rag = cfg["ragflow"]
@@ -43,6 +62,7 @@ def run(cfg_path: str) -> Dict[str, Any]:
     chat_id: str = str(rag.get("chat_id") or "")
 
     golden_raw = load_golden(run_cfg["dataset"], run_cfg.get("max_questions"))
+    ds_info = dataset_fingerprint(run_cfg["dataset"], golden_raw)
     retrieval_only = bool(run_cfg.get("retrieval_only", False))
     qps = float(run_cfg.get("qps", 2) or 2)
     out_dir = os.path.join(run_cfg.get("output_dir", "results"),
@@ -68,8 +88,10 @@ def run(cfg_path: str) -> Dict[str, Any]:
         r_scores = score_retrieval(item, chunks)
         row: Dict[str, Any] = {
             "question_id": item.question_id,
+            "question": item.question,
             "experiment_id": run_cfg.get("experiment_id"),
             "question_type": item.question_type,
+            "difficulty": item.difficulty,
             "risk_level": item.risk_level,
             "answerable": item.answerable,
             **{k: v for k, v in r_scores.items()},
@@ -123,7 +145,9 @@ def run(cfg_path: str) -> Dict[str, Any]:
                                     "prompt": q["prompt"]},
                                    ensure_ascii=False) + "\n")
 
-    report = build_report(per_q, latency_stats(e2e_all), retrieval_only)
+    report = build_report(per_q, latency_stats(e2e_all), retrieval_only,
+                          dataset_info=ds_info,
+                          retrieval_config=dict(ret_cfg))
     with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     from .report import render_markdown

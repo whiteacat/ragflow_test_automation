@@ -27,7 +27,9 @@ def _rate(rows: List[Dict[str, Any]], key: str) -> tuple[Optional[float], int, i
 
 
 def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
-                 retrieval_only: bool) -> Dict[str, Any]:
+                 retrieval_only: bool,
+                 dataset_info: Optional[Dict[str, Any]] = None,
+                 retrieval_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     answerable = [r for r in rows if r.get("answerable", True)]
     m: Dict[str, Any] = {}
     # RAG（全自动）
@@ -113,6 +115,8 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
     return {
         "mode": "retrieval_only" if retrieval_only else "full",
         "n_questions": len(rows),
+        "dataset": dataset_info,
+        "retrieval": retrieval_config,
         "metrics": m,
         "verdicts": verdicts,
         "stage1_rag_gate": stage1,
@@ -126,6 +130,11 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
 
 def render_markdown(rep: Dict[str, Any]) -> str:
     L = [f"# RAGFlow 自动化测试报告（{rep['mode']}，n={rep['n_questions']}）", ""]
+    if rep.get("dataset"):
+        d = rep["dataset"]
+        L.append(f"数据集: {d.get('path')}（sha256={str(d.get('sha256'))[:12]}…，"
+                 f"n={d.get('n_items')}）")
+        L.append("")
     L.append("## 指标结果（全自动部分）")
     for k, v in rep["metrics"].items():
         if k.startswith("_"):
