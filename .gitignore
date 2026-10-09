@@ -46,3 +46,5 @@ config/test.yaml
 # Archives / backups
 *.zip
 *.tar.gz
+/企业RAG测试集构建要求_600MW规程案例.docx
+/docs/TESTSET_BUILD.md
