@@ -29,15 +29,19 @@ cp config/test.yaml.example config/test.yaml
 # 也可用环境变量 RAGFLOW_API_KEY / RAGFLOW_BASE_URL 覆盖敏感项
 ```
 
- golden 测试集按 xlsx「测试集字段映射」组织，模板见
-`datasets/golden_sample.jsonl`（6 道示例覆盖 parameter/procedure/
-版本冲突/multi_document/附件依赖/negative 全题型）。
-先标注 10~20 道人工确认的黄金题，验证通过后再扩到 500~1000 题。
+ golden 测试集按 xlsx「测试集字段映射」+《企业RAG测试集构建要求》Table9 组织，模板见
+`datasets/golden_sample.jsonl`（8 道：parameter/procedure/
+版本冲突/multi_document/附件依赖/negative + 600MW 表格 PAR-TABLE-001/模糊拒答）。
+字段规范见 [docs/DATASET_SPEC.md](docs/DATASET_SPEC.md)，七层结构说明见 [docs/TESTSET_BUILD.md](docs/TESTSET_BUILD.md)。
+先标注 10~20 道人工确认的黄金题，验证通过后按 §11 配额先扩到 120 条核心集，再到 300~500。
 
 ## 运行
 
 ```bash
 python scripts/validate_dataset.py datasets/golden_sample.jsonl
+python scripts/coverage_check.py datasets/golden_sample.jsonl  # §11 配额/章节/表格占比缺口
+python scripts/extract_docx_baseline.py --docx 600MW规程.docx --out datasets/parse_baseline.jsonl  # §5.1 基线
+python scripts/parse_benchmark.py --baseline datasets/parse_baseline.jsonl --chunks-file /tmp/chunks.jsonl  # §5 解析比对
 python scripts/health_check.py --config config/test.yaml
 python scripts/retrieval_benchmark.py --config config/test.yaml  # 阶段1：RAG 离线基准
 python scripts/run_all.py --config config/test.yaml              # 全链路 + 阶段验收报告

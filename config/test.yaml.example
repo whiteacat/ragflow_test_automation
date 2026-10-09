@@ -14,6 +14,19 @@ retrieval:
   keyword: false
   highlight: false
   rerank_id: null      # 如有 rerank 模型可填，否则 null
+  # §6.2 重排 A/B：填 [关闭值, 开启值] 即对同一批问题跑两次、同一候选集对比排序变化
+  # 例：rerank_compare: [null, "rerank-model-id"]；留空/null 则不跑对比
+  rerank_compare: null
+
+parse:
+  # §5 原文解析链路（独立于问答）：先 extract_docx_baseline 再 parse_benchmark
+  baseline: "datasets/parse_baseline.jsonl"
+  dataset_id: null     # 默认取 ragflow.dataset_ids[0]，此处可覆盖指定知识库
+  document_id: null    # RAGFlow 侧 document_id（list_documents 获取后填入）
+
+tier:
+  # §10 三层集：core=全部专业审核（发布验收/回归）；extended=工具生成+抽查；adversarial=持续对抗
+  active: "core"
 
 run:
   dataset: "datasets/golden_sample.jsonl"
