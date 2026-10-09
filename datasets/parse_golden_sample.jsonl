@@ -1,0 +1,4 @@
+{"block_id": "SEC-1-PARA-001", "kind": "paragraph", "chapter_path": "1 机组启动 > 1.1 检修后的验收与试验", "text": "机组启动前应确认润滑油压正常。", "key_facts": ["润滑油压正常"], "must_not_contain": ["口口", "???"]}
+{"block_id": "SEC-1-NUM-001", "kind": "number_unit", "chapter_path": "1 机组启动 > 1.1 检修后的验收与试验 > 1.1.5 水压试验", "text": "23.55 MPa", "key_facts": ["23.55", "MPa"], "table_or_item": "水压试验表/超压试验压力列", "must_not_contain": []}
+{"block_id": "SEC-1-TBL-001", "kind": "table_cell", "chapter_path": "1 机组启动 > 1.1 检修后的验收与试验 > 1.1.5 水压试验", "text": "省煤器、水冷壁、过热器 超压试验压力 23.55 MPa", "key_facts": ["省煤器", "水冷壁", "过热器", "23.55 MPa"], "table_or_item": "水压试验表/省煤器水冷壁过热器行/超压试验压力列", "must_not_contain": []}
+{"block_id": "SEC-4-STEP-001", "kind": "paragraph", "chapter_path": "4 事故处理 > 保护跳闸", "text": "发生保护跳闸后，先确认控制电源，再查保护动作信号，最后按规程处理；严禁未经确认复归运行。", "key_facts": ["先确认控制电源", "再查保护动作信号", "严禁未经确认复归"], "must_not_contain": []}

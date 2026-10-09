@@ -130,3 +130,53 @@ class RAGFlowClient:
             params={"page": page, "page_size": page_size}, timeout=self.timeout)
         r.raise_for_status()
         return r.json()
+
+    def get_document(self, dataset_id: str, document_id: str) -> Dict[str, Any]:
+        r = self.session.get(
+            f"{self.base_url}/api/v1/datasets/{dataset_id}/documents/{document_id}",
+            timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()
+
+    def list_chunks(self, dataset_id: str, document_id: str, page: int = 1,
+                    page_size: int = 100, keywords: str = "") -> Dict[str, Any]:
+        params: Dict[str, Any] = {"page": page, "page_size": page_size}
+        if keywords:
+            params["keywords"] = keywords
+        r = self.session.get(
+            f"{self.base_url}/api/v1/datasets/{dataset_id}/documents/"
+            f"{document_id}/chunks",
+            params=params, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()
+
+    def list_all_chunks(self, dataset_id: str, document_id: str,
+                        page_size: int = 100) -> List[RetrievedChunk]:
+        out: List[RetrievedChunk] = []
+        page = 1
+        while True:
+            payload = self.list_chunks(dataset_id, document_id, page, page_size)
+            data = payload.get("data", payload)
+            raw = data.get("chunks") or data.get("chunk_list") or []
+            if not raw:
+                break
+            for c in raw:
+                if not isinstance(c, dict):
+                    continue
+                out.append(RetrievedChunk(
+                    chunk_id=str(c.get("chunk_id") or c.get("id") or ""),
+                    document_id=str(c.get("document_id") or c.get("doc_id")
+                                    or document_id),
+                    document_name=str(c.get("document_name") or c.get("docnm_kwd") or ""),
+                    content=str(c.get("content") or ""),
+                    score=0.0,
+                    rank=len(out) + 1,
+                    metadata={k: v for k, v in c.items() if k != "content"},
+                ))
+            total = data.get("total")
+            if total is not None and len(out) >= int(total):
+                break
+            if len(raw) < page_size:
+                break
+            page += 1
+        return out
