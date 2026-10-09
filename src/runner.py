@@ -15,12 +15,30 @@ import time
 from typing import Any, Dict, List
 
 from .config import load_config
+from .attribution import attribute_failure
 from .judge import build_review_queue
 from .metrics_generation import latency_stats, score_generation_rule
-from .metrics_retrieval import score_retrieval
+from .metrics_retrieval import first_hit_rank, score_retrieval
 from .models import GoldenItem
 from .ragflow_client import RAGFlowClient
 from .report import build_report
+
+
+def _retrieve_with(client: RAGFlowClient, question: str, dataset_ids, ret_cfg: dict,
+                   rerank_override=None):
+    kw = dict(
+        page=int(ret_cfg.get("page", 1)),
+        page_size=int(ret_cfg.get("page_size", 30)),
+        top_k=int(ret_cfg.get("top_k", 1024)),
+        similarity_threshold=float(ret_cfg.get("similarity_threshold", 0.2)),
+        vector_similarity_weight=float(ret_cfg.get("vector_similarity_weight", 0.3)),
+        keyword=bool(ret_cfg.get("keyword", False)),
+        highlight=bool(ret_cfg.get("highlight", False)),
+        rerank_id=rerank_override if rerank_override != "__default__"
+        else ret_cfg.get("rerank_id"))
+    if "document_ids" in ret_cfg and ret_cfg["document_ids"]:
+        kw["document_ids"] = list(ret_cfg["document_ids"])
+    return client.retrieve(question, dataset_ids, **kw)
 
 
 def load_golden(path: str, limit=None) -> List[Dict[str, Any]]:
@@ -73,28 +91,35 @@ def run(cfg_path: str) -> Dict[str, Any]:
     e2e_all: List[float] = []
     for g in golden_raw:
         item = GoldenItem.from_dict(g)
-        # --- 检索 ---
-        ret = client.retrieve(
-            item.question, dataset_ids,
-            page=int(ret_cfg.get("page", 1)),
-            page_size=int(ret_cfg.get("page_size", 30)),
-            top_k=int(ret_cfg.get("top_k", 1024)),
-            similarity_threshold=float(ret_cfg.get("similarity_threshold", 0.2)),
-            vector_similarity_weight=float(ret_cfg.get("vector_similarity_weight", 0.3)),
-            keyword=bool(ret_cfg.get("keyword", False)),
-            highlight=bool(ret_cfg.get("highlight", False)),
-            rerank_id=ret_cfg.get("rerank_id"))
+        # --- 检索（主配置；rerank_compare 开启时再跑一次做 A/B） ---
+        ret = _retrieve_with(client, item.question, dataset_ids, ret_cfg,
+                             rerank_override="__default__")
         chunks = ret["chunks"]
         r_scores = score_retrieval(item, chunks)
+        rerank_cmp = ret_cfg.get("rerank_compare")
+        rank_base = r_scores.get("hit_rank")
+        rerank_info: dict = {}
+        if isinstance(rerank_cmp, list) and len(rerank_cmp) == 2:
+            other = rerank_cmp[1] if ret_cfg.get("rerank_id") == rerank_cmp[0] else rerank_cmp[0]
+            ret2 = _retrieve_with(client, item.question, dataset_ids, ret_cfg,
+                                  rerank_override=other)
+            rank_after = first_hit_rank(item, ret2["chunks"])
+            from .metrics_retrieval import rerank_gain as _rg
+            rerank_info = {"hit_rank_base": rank_base, "hit_rank_rerank": rank_after,
+                           "rerank_gain": _rg(rank_base, rank_after),
+                           "rerank_pair": list(rerank_cmp)}
         row: Dict[str, Any] = {
             "question_id": item.question_id,
             "question": item.question,
             "experiment_id": run_cfg.get("experiment_id"),
+            "test_stage": item.test_stage,
             "question_type": item.question_type,
+            "paraphrase_group": item.paraphrase_group,
             "difficulty": item.difficulty,
             "risk_level": item.risk_level,
             "answerable": item.answerable,
             **{k: v for k, v in r_scores.items()},
+            **rerank_info,
             "retrieval_latency_ms": ret["latency_ms"],
             "evidence_snippet": "\n".join(
                 f"[{c.rank}] {c.document_name}#{c.chunk_id}: {c.content[:300]}"
@@ -114,13 +139,37 @@ def run(cfg_path: str) -> Dict[str, Any]:
                 "chat_error": qa.error,
                 **g_scores,
                 "golden_answer": item.golden_answer,
-                "required_facts": item.required_facts,
-                "forbidden_facts": item.forbidden_facts,
+                "expected_answer_points": item.expected_answer_points,
+                "mandatory_points": item.mandatory_points,
+                "forbidden_claims": item.forbidden_claims,
                 "must_cite": item.must_cite,
-                "must_abstain": item.must_abstain,
+                "should_refuse": item.should_refuse,
+                "refusal_reason": item.refusal_reason,
+                "evidence_text": item.evidence_text,
+                "chapter_path": item.chapter_path,
+                "table_or_item": item.table_or_item,
+                "expected_document": item.expected_document,
+                "expected_chunk": item.expected_chunk,
+                "requires_order": item.requires_order,
+                "requires_unit": item.requires_unit,
+                "source_version": item.source_version,
+                "reviewer": item.reviewer,
+                "review_status": item.review_status,
             })
+            row["failure_attribution"] = attribute_failure(row)
             e2e_all.append(row["e2e_latency_ms"])
         else:
+            row.update({
+                "evidence_text": item.evidence_text,
+                "chapter_path": item.chapter_path,
+                "table_or_item": item.table_or_item,
+                "expected_document": item.expected_document,
+                "expected_chunk": item.expected_chunk,
+                "refusal_reason": item.refusal_reason,
+                "source_version": item.source_version,
+                "review_status": item.review_status,
+            })
+            row["failure_attribution"] = attribute_failure(row)
             row["e2e_latency_ms"] = ret["latency_ms"]
             e2e_all.append(row["e2e_latency_ms"])
         per_q.append(row)

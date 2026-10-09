@@ -1,12 +1,7 @@
 """规则可自动计算的生成/平台指标。
 
-GEN-02 关键事实召回率（规则版：归一化包含匹配；中文做全半角/空白归一）
-GEN-05 拒答正确率（规则版：拒答模板识别）
-GEN-09 禁止事项识别率（规则版：forbidden_facts 出现即命中=失败）
-GEN-10 引用完整率（规则版：引用标记存在性）
-OPS-03/04 P50/P95（纯计算）
-TRACE-01 链路完整率（本轮调用字段完整性）
-GEN-07/GEN-08/RAG-06/RAG-07/GEN-01 等语义项只给规则初筛，真值以 judge/人工为准。
+规范键见 docs/DATASET_SPEC.md：expected_answer_points（旧 required_facts 只读兼容）、
+forbidden_claims（旧 forbidden_facts 只读兼容）、should_refuse（旧 must_abstain 只读兼容）。
 """
 from __future__ import annotations
 
@@ -114,18 +109,64 @@ def latency_stats(e2e_ms: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
+UNIT_PATTERN = re.compile(r"(MPa|kPa|Pa|kV|V|A|mA|℃|°C|N·m|Nm|r/min|mm|m\b|t/h|MW|kW|%)")
+
+
+def order_correct(required_facts: List[str], answer: str) -> Optional[int]:
+    if len(required_facts) < 2:
+        return None
+    a = normalize_text(answer)
+    pos = []
+    for f in required_facts:
+        f_n = normalize_text(f)
+        idx = a.find(f_n) if f_n else -1
+        if idx < 0:
+            parts = [p for p in re.split(r"[；;，。,、]", f) if len(normalize_text(p)) >= 6]
+            hits = [a.find(normalize_text(p)) for p in parts]
+            hits = [h for h in hits if h >= 0]
+            idx = min(hits) if hits else -1
+        if idx < 0:
+            return None
+        pos.append(idx)
+    return 1 if pos == sorted(pos) else 0
+
+
+def unit_complete(required_facts: List[str], answer: str) -> Optional[int]:
+    units = {u for f in required_facts for u in UNIT_PATTERN.findall(f or "")}
+    if not units:
+        return None
+    a = normalize_text(answer)
+    return 1 if all(normalize_text(u) in a for u in units) else 0
+
+
+def mandatory_recall(mandatory_points: List[str], answer: str) -> Optional[float]:
+    if not mandatory_points:
+        return None
+    return fact_recall(mandatory_points, answer)
+
+
 def score_generation_rule(question: dict, answer: str) -> Dict[str, Optional[float]]:
-    required = question.get("required_facts") or []
-    forbidden = question.get("forbidden_facts") or []
+    required = (question.get("expected_answer_points")
+                or question.get("required_facts") or [])
+    mandatory = question.get("mandatory_points") or []
+    forbidden = (question.get("forbidden_claims")
+                 or question.get("forbidden_facts") or [])
     abstained = is_abstention(answer)
-    return {
+    out: Dict[str, Optional[float]] = {
         "fact_recall_rule": fact_recall(required, answer),
         "abstention_correct": abstention_correct(
             bool(question.get("answerable", True)),
-            bool(question.get("must_abstain", False)), answer),
+            bool(question.get("must_abstain", question.get("should_refuse", False))), answer),
         "forbidden_fact_hit": forbidden_hit(forbidden, answer),
         "citation_complete_rule": citation_complete(
             bool(question.get("must_cite", False)), answer,
             bool(question.get("answerable", True)), abstained),
         "abstained": 1 if abstained else 0,
     }
+    if mandatory:
+        out["mandatory_recall_rule"] = mandatory_recall(mandatory, answer)
+    if question.get("requires_order"):
+        out["order_correct_rule"] = order_correct(required, answer)
+    if question.get("requires_unit"):
+        out["unit_complete_rule"] = unit_complete(required, answer)
+    return out

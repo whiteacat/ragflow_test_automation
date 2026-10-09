@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from .metrics_generation import latency_stats
+from .metrics_retrieval import paraphrase_group_recall
 from .thresholds import STAGE_GATES, THRESHOLDS, VETO, check
 
 
@@ -65,8 +66,8 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
             if fr is None:
                 continue
             per_q.append(fr)
-            # 近似还原计数：fact_recall_rule 是比例，用 required_facts 长度还原
-            n_req = len(r.get("required_facts") or [])
+            # 近似还原计数：fact_recall_rule 是比例，用 expected_answer_points 长度还原
+            n_req = len(r.get("expected_answer_points") or r.get("required_facts") or [])
             tot_t += n_req
             tot_c += round(fr * n_req)
         m["GEN-02-fact"] = {"value": (tot_c / tot_t) if tot_t else None,
@@ -87,6 +88,45 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
                 vetos.append({"question_id": r["question_id"],
                               "veto": "高风险题拒答/转人工疑似失败"})
         m["_vetos"] = vetos
+        # 要点化/顺序/单位（§7.1 规则版）
+        for key, mid in [("order_correct_rule", "GEN-ORDER"),
+                         ("unit_complete_rule", "GEN-UNIT")]:
+            v, n, _ = _rate(rows, key)
+            if n:
+                m[mid + "-rule"] = {"value": v, "n": n}
+        # 拒答分原因统计（§7.2 Table7）
+        ref_rows = [r for r in rows if r.get("should_refuse") or r.get("must_abstain")
+                    or r.get("refusal_reason")]
+        if ref_rows:
+            by_reason: dict = {}
+            for r in ref_rows:
+                by_reason.setdefault(str(r.get("refusal_reason") or "?"), []).append(r)
+            m["REFUSAL-by-reason"] = {
+                k: {"n": len(v), "abstention_correct": _rate(v, "abstention_correct")[0]}
+                for k, v in by_reason.items()}
+        # 失败归因分布（§12.1 八类）
+        attr: dict = {}
+        for r in rows:
+            a = r.get("failure_attribution")
+            if a:
+                attr[a] = attr.get(a, 0) + 1
+        if attr:
+            m["_attribution"] = attr
+        # 改写组召回（§8.2-10：同组多种表达按组统计，避免虚增覆盖）
+        grp = paraphrase_group_recall(rows)
+        if grp:
+            m["paraphrase_group_recall"] = {
+                "n_groups": len(grp),
+                "mean": sum(grp.values()) / len(grp),
+                "min_group": min(grp, key=lambda k: grp[k]),
+                "min_value": min(grp.values())}
+        # 审核态分布（§10 Table9）
+        if any("review_status" in r for r in rows):
+            st: dict = {}
+            for r in rows:
+                st[str(r.get("review_status", "?"))] = st.get(
+                    str(r.get("review_status", "?")), 0) + 1
+            m["_review_status"] = st
 
     # 阈值判定（只判有值项）
     verdicts = {}
@@ -103,6 +143,12 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
     if "GEN-10-rule" in m and m["GEN-10-rule"]["value"] is not None:
         ok, desc = check("GEN-10", m["GEN-10-rule"]["value"])
         verdicts["GEN-10(规则版)"] = {"pass": ok, "desc": desc}
+    if "GEN-ORDER-rule" in m and m["GEN-ORDER-rule"]["value"] is not None:
+        ok, desc = check("GEN-ORDER", m["GEN-ORDER-rule"]["value"])
+        verdicts["GEN-ORDER(规则版)"] = {"pass": ok, "desc": desc}
+    if "GEN-UNIT-rule" in m and m["GEN-UNIT-rule"]["value"] is not None:
+        ok, desc = check("GEN-UNIT", m["GEN-UNIT-rule"]["value"])
+        verdicts["GEN-UNIT(规则版)"] = {"pass": ok, "desc": desc}
 
     # 阶段门：stage1（检索基线）可直接判定；其余阶段列出需补的证据
     stage1 = {}
@@ -122,9 +168,10 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
         "stage1_rag_gate": stage1,
         "latency": lat,
         "veto_count": len(m.get("_vetos", [])),
-        "note": "规则版结论可直接用于 RAG-01~05/09/10、GEN-02/05/09/10 初筛；"
+        "note": "规则版结论可直接用于 RAG-01~05/09/10、GEN-02/05/09/10 初筛；顺序/单位为规则版；"
                 "GEN-01/03/04/06/08、RAG-06/07/08 以 review_queue 复核为准；"
-                "SEC/OPS/DATA/AGENT/SAFE 见平台核查清单。",
+                "失败归因见 _attribution（§12.1 八类）；"
+                "SEC/OPS/DATA/AGENT/SAFE 见平台核查清单；解析层见 parse_summary.json（§5）。",
     }
 
 

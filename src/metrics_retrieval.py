@@ -15,10 +15,19 @@ def _norm(s: str) -> str:
     return (s or "").strip().lower()
 
 
+def _gold_sets(golden: GoldenItem):
+    chunks = {_norm(c) for c in golden.chunk_ids if c}
+    if golden.expected_chunk:
+        chunks.add(_norm(golden.expected_chunk))
+    chunks |= {_norm(c) for c in (golden.acceptable_chunks or []) if c}
+    docs = {_norm(d) for d in golden.document_ids if d}
+    if golden.expected_document:
+        docs.add(_norm(golden.expected_document))
+    return chunks, docs
+
+
 def first_hit_rank(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional[int]:
-    """正确证据首次出现位置（1-based），未命中返回 None。"""
-    gold_chunks = {_norm(c) for c in golden.chunk_ids if c}
-    gold_docs = {_norm(d) for d in golden.document_ids if d}
+    gold_chunks, gold_docs = _gold_sets(golden)
     if not gold_chunks and not gold_docs:
         return None
     for c in chunks:
@@ -78,12 +87,9 @@ def ndcg_at_10(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional[flo
 
 
 def attachment_recall(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional[int]:
-    """RAG-09：仅 requires_attachment=True 的题计入；附件 chunk 任一命中=1。"""
-    if not golden.requires_attachment:
+    if not golden.attachment_chunk_ids:
         return None
     targets = {_norm(c) for c in golden.attachment_chunk_ids if c}
-    if not targets:
-        return None
     for c in chunks:
         if _norm(c.chunk_id) in targets:
             return 1
@@ -91,19 +97,36 @@ def attachment_recall(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optio
 
 
 def cross_doc_coverage(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional[int]:
-    """RAG-10：仅 multi_document 题且 required_facts 非空时计入。
-
-    简化判定：required_facts 每条需在检索文本（含 chunk content）或 golden 证据中
-    可定位。这里只做可全自动部分——chunk_id/doc 覆盖全部 golden chunk_ids=1。
-    语义级覆盖（事实→证据映射）交由 judge.py 人工/LLM 复核。
-    """
-    if golden.question_type != "multi_document":
+    if golden.question_type not in ("multi_document",):
         return None
-    if not golden.chunk_ids:
+    if not golden.chunk_ids and not golden.expected_chunk:
         return None
     gold = {_norm(c) for c in golden.chunk_ids}
+    if golden.expected_chunk:
+        gold.add(_norm(golden.expected_chunk))
     seen = {_norm(c.chunk_id) for c in chunks} | {_norm(c.document_id) for c in chunks}
     return 1 if gold <= seen else 0
+
+
+def rerank_gain(rank_before: Optional[int], rank_after: Optional[int]) -> Optional[int]:
+    if rank_before is None or rank_after is None:
+        return None
+    if rank_after < rank_before:
+        return 1
+    if rank_after == rank_before:
+        return 0
+    return -1
+
+
+def paraphrase_group_recall(rows: List[Dict]) -> Dict[str, float]:
+    from collections import defaultdict
+    groups: Dict[str, List[float]] = defaultdict(list)
+    for r in rows:
+        g = r.get("paraphrase_group") or r.get("question_id")
+        v = r.get("Top@5")
+        if v is not None:
+            groups[g].append(float(v))
+    return {g: (sum(v) / len(v)) for g, v in groups.items() if v}
 
 
 def score_retrieval(golden: GoldenItem,

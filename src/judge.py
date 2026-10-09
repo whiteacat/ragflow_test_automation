@@ -12,8 +12,8 @@ import json
 from typing import Any, Dict, List, Optional
 
 JUDGE_TASKS = {
-    "GEN-01": "答案准确率：对照 golden_answer + required_facts，0=错误/关键事实错，1=基本正确但缺次要信息，2=正确完整。2分计正确。",
-    "GEN-03": "答案完整率：required_facts 是否全部完整表达（含条件/例外）。",
+    "GEN-01": "答案准确率：对照 golden_answer + expected_answer_points，0=错误/关键事实错，1=基本正确但缺次要信息，2=正确完整。2分计正确。",
+    "GEN-03": "答案完整率：expected_answer_points 是否全部完整表达（含条件/例外）。",
     "GEN-04": "幻觉率：答案中每条事实是否有检索证据或 golden 支持；无支持即幻觉。",
     "GEN-06": "错误事实率：答案中是否有与 golden/证据矛盾的事实。",
     "GEN-08": "操作步骤正确率：顺序、前置条件、状态确认是否正确（procedure/accident 题）。",
@@ -59,13 +59,14 @@ def build_review_queue(items: List[Dict[str, Any]],
                 "question": it.get("question"),
                 "answer": it.get("predicted_answer", ""),
                 "golden_answer": it.get("golden_answer", ""),
-                "required_facts": it.get("required_facts", []),
-                "forbidden_facts": it.get("forbidden_facts", []),
+                "required_facts": it.get("expected_answer_points") or it.get("required_facts", []),
+                "forbidden_facts": it.get("forbidden_claims") or it.get("forbidden_facts", []),
                 "evidence_snippet": (it.get("evidence_snippet", "") or "")[:2000],
                 "prompt": build_prompt(
                     it.get("question", ""), it.get("predicted_answer", ""),
-                    it.get("golden_answer", ""), it.get("required_facts", []),
-                    it.get("forbidden_facts", []),
+                    it.get("golden_answer", ""),
+                    it.get("expected_answer_points") or it.get("required_facts", []),
+                    it.get("forbidden_claims") or it.get("forbidden_facts", []),
                     it.get("evidence_snippet", ""), t),
                 "score": None,
             })
