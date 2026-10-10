@@ -47,4 +47,5 @@ config/test.yaml
 *.zip
 *.tar.gz
 /企业RAG测试集构建要求_600MW规程案例.docx
+/企业RAG全环节测试集_600MW.xlsx
 /docs/TESTSET_BUILD.md

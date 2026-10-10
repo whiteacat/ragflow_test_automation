@@ -33,6 +33,9 @@ cp config/test.yaml.example config/test.yaml
 `datasets/golden_sample.jsonl`（8 道：parameter/procedure/
 版本冲突/multi_document/附件依赖/negative + 600MW 表格 PAR-TABLE-001/模糊拒答）。
 字段规范见 [docs/DATASET_SPEC.md](docs/DATASET_SPEC.md)，七层结构说明见 [docs/TESTSET_BUILD.md](docs/TESTSET_BUILD.md)。
+第二种输入：`企业RAG全环节测试集_600MW.xlsx` 经 `scripts/import_xlsx_cases.py`
+转为 `datasets/xlsx_golden.jsonl`（问答 84 条）+ `datasets/xlsx_parse_baseline.jsonl`（解析 36 条），
+`run.stages` 可选环节子集执行，结果可写回 xlsx 执行记录（详见 DATASET_SPEC 末节）。
 先标注 10~20 道人工确认的黄金题，验证通过后按 §11 配额先扩到 120 条核心集，再到 300~500。
 
 ## 运行

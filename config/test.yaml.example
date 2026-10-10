@@ -30,6 +30,9 @@ tier:
 
 run:
   dataset: "datasets/golden_sample.jsonl"
+  # xlsx 全环节集：dataset 切到 datasets/xlsx_golden.jsonl，stages 选环节子集
+  # 如 stages: ["retrieval", "rerank"]（留空/null 跑全部环节）
+  stages: null
   output_dir: "results"
   experiment_id: "exp_local_001"
   # 只跑检索（RAG-01~05/09/10）设为 true；跑全链路设为 false

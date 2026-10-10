@@ -33,6 +33,10 @@
 | `requires_unit` | 参数题是 | bool | 数值是否须带单位/上下限方向（GEN-UNIT 口径） |
 | `attachment_chunk_ids` | 附件题是 | string[] | 附件所在 Chunk；**非空即视为需附件**，不再另写布尔 |
 | `source_version/hash` | 是 | string | 受控原文版本与文件哈希（可重复性绑定，§5.1/§10） |
+| `scenario_id` | 全环节集是 | string | 场景编号（如 SCN-001）；同一场景跨环节归组做闭环汇总 |
+| `verify_method` | 按需 | string | xlsx 验证方式（如 自动测试/自动比对+人工复核） |
+| `source_ref` | 按需 | string | 用例来源定位（如 测试用例总表#R42） |
+| `needs_chunk_mapping` | 按需 | bool | 入库后待映射预期 Chunk；为 true 时检索指标不计分母，映射后置 false |
 | `reviewer/review_status` | 正式集是 | string/enum | 审核人；`pending/approved/rejected/deprecated`（`approved` 须有审核人） |
 | `remarks/notes` | 按需 | string | 判定说明、干扰项备注 |
 
@@ -76,3 +80,36 @@
 ## 校验
 
 `python scripts/validate_dataset.py <file>`：废弃键告警、拒答六类、表格行列、步骤顺序、参数单位、高风险要点、审核人规则；`python scripts/coverage_check.py <file>`：§11 配额与章节缺口。
+
+## 输入类型二：xlsx 全环节测试集
+
+`企业RAG全环节测试集_600MW.xlsx`（测试用例总表，120 条有效用例，30 场景）为业务基准源，
+通过导入脚本转为本规范两份标准文件（xlsx 本体为业务受控文件，不入库 git）：
+
+```bash
+python scripts/import_xlsx_cases.py --xlsx 企业RAG全环节测试集_600MW.xlsx
+# → datasets/xlsx_golden.jsonl（RET/RER/ANS/CIT/REF 共 84 条，规范键）
+# → datasets/xlsx_parse_baseline.jsonl（PAR/CHK 共 36 条，parse 基线格式）
+```
+
+映射要点：测试环节→`test_stage`（引用→qa 且 `must_cite=true`，回答行显式 `must_cite=false` 以区分环节）；
+问题类型→十二类+拒答六类；
+阶段预期结果拆分为要点/`forbidden_claims`（`禁止：`引导段）；`表Txxx`→`table_or_item`；
+版本去括号；同一 SCN 的 RET/RER/ANS/CIT 归入同一 `paraphrase_group`；
+`source_hash` 取自填写说明；审核态全部 `pending`（不冒填）。
+注意：同一 SCN 的 PAR/CHK 共用原文证据，`parse_benchmark` 的 `duplicate_rate` 天然偏高，
+以覆盖率指标为准；表格占比按 120 全量计（含解析 36 条）恰为 20%。
+
+分环节执行（`run.stages` 过滤，`retrieval_only` 配合）：
+
+```bash
+# 解析：python scripts/parse_benchmark.py --baseline datasets/xlsx_parse_baseline.jsonl --chunks-file ...
+# 召回/重排：run.dataset=datasets/xlsx_golden.jsonl + run.stages=[retrieval, rerank] + retrieval_only=true
+# 问答/引用/拒答：同上 dataset + run.stages=[qa, refusal] 全链路
+# 入库映射 Chunk：scripts/assist_chunk_mapping.py（assist 候选 → 人工确认 → apply 写回）
+# 写回执行记录：scripts/export_xlsx_record.py（默认写副本，--in-place 覆盖前请备份）
+```
+
+测试规则（该表测试规则 sheet）：召回 Top10、重排 Top3、关键要点 100%——
+对应本项目 RAG-02（Top@10）、报告 `RER-Top3`、GEN-02；失败按最早环节归因八类，
+场景闭环汇总见报告 `_scenarios`/“场景闭环”节。
