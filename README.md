@@ -10,14 +10,15 @@
 - ✅ 全自动（已实现）：RAG-01/02/03/04/05/09/10、GEN-02/05/09/10（规则版）、
   OPS-03/04（P50/P95）、TRACE-01（调用层）、DATA-02（元数据扫描）
 - 🟡 半自动：GEN-01/03/04/06/07/08、RAG-06/07/08、TRACE-02、SEC-02/03 切片、
-  DATA-03、AGENT-01/02、SAFE-01 计数 → `review_queue.jsonl` 待人工/LLM 复核
+  DATA-03、AGENT-01/02、SAFE-01 计数 → `review_queue.jsonl` 待人工/LLM 复核；
+  DATA-01（解析）→ `parse_benchmark.py` 自动比对 + 人工复核异常清单
 - ⬜ 人工·演练·监控：SEC-01/04/05/06、OPS-01/02/05/06、COST-01、USER-01、
-  DATA-01、AGENT-03 → `src/platform_checks.py` 核查清单
+  DATA-01 复核结论、AGENT-03 → `src/platform_checks.py` 核查清单
 
 ## 安装
 
 ```bash
-pip install -e .   # 或 pip install requests pyyaml
+pip install -e .   # 或 pip install requests pyyaml openpyxl
 ```
 
 ## 配置
@@ -29,37 +30,101 @@ cp config/test.yaml.example config/test.yaml
 # 也可用环境变量 RAGFLOW_API_KEY / RAGFLOW_BASE_URL 覆盖敏感项
 ```
 
- golden 测试集按 xlsx「测试集字段映射」+《企业RAG测试集构建要求》Table9 组织，模板见
-`datasets/golden_sample.jsonl`（8 道：parameter/procedure/
-版本冲突/multi_document/附件依赖/negative + 600MW 表格 PAR-TABLE-001/模糊拒答）。
-字段规范见 [docs/DATASET_SPEC.md](docs/DATASET_SPEC.md)，七层结构说明见 [docs/TESTSET_BUILD.md](docs/TESTSET_BUILD.md)。
-第二种输入：`企业RAG全环节测试集_600MW.xlsx` 经 `scripts/import_xlsx_cases.py`
-转为 `datasets/xlsx_golden.jsonl`（问答 84 条）+ `datasets/xlsx_parse_baseline.jsonl`（解析 36 条），
-`run.stages` 可选环节子集执行，结果可写回 xlsx 执行记录（详见 DATASET_SPEC 末节）。
-先标注 10~20 道人工确认的黄金题，验证通过后按 §11 配额先扩到 120 条核心集，再到 300~500。
+关键开关（`config/test.yaml`）：
 
-## 运行
+| 位置 | 说明 |
+|---|---|
+| `run.dataset` | 本次运行的问答数据集（二选一：`datasets/golden_sample.jsonl` 手写样例，或 `datasets/xlsx_golden.jsonl` xlsx 转换集） |
+| `run.stages` | 环节子集过滤，`null` 跑全环节；如 `["retrieval", "rerank"]` 只跑召回/重排 |
+| `run.retrieval_only` | `true` 只跑检索（RAG 指标，无需 `chat_id`）；`false` 跑全链路 |
+| `retrieval.rerank_compare` | `§6.2` 重排 A/B，如 `[null, "rerank-model-id"]` 对同一批题跑两次对比 |
+| `parse.baseline/document_id` | 解析比对的基线文件与 RAGFlow 侧文档 |
+| `tier.active` | 测试集分层：`core` 核心金标准 / `extended` 扩展回归 / `adversarial` 对抗 |
+
+## 测试数据：两种输入
+
+- **手写 jsonl**：`datasets/golden_sample.jsonl`（8 道样例），字段规范见
+  [docs/DATASET_SPEC.md](docs/DATASET_SPEC.md)，七层结构见 [docs/TESTSET_BUILD.md](docs/TESTSET_BUILD.md)。
+  先标注 10~20 道人工确认的黄金题，验证通过后按 §11 配额先扩到 120 条核心集，再到 300~500。
+- **xlsx 全环节集**：`企业RAG全环节测试集_600MW.xlsx`（测试用例总表，120 条，30 场景）
+  为业务基准源，运行时不直读，需先转换（见流程步骤 0）。xlsx 本体为受控文件，不入库 git。
+
+## 完整测试流程
+
+### 步骤 0：准备数据（二选一）
 
 ```bash
-python scripts/validate_dataset.py datasets/golden_sample.jsonl
-python scripts/coverage_check.py datasets/golden_sample.jsonl  # §11 配额/章节/表格占比缺口
-python scripts/extract_docx_baseline.py --docx 600MW规程.docx --out datasets/parse_baseline.jsonl  # §5.1 基线
-python scripts/parse_benchmark.py --baseline datasets/parse_baseline.jsonl --chunks-file /tmp/chunks.jsonl  # §5 解析比对
-python scripts/health_check.py --config config/test.yaml
-python scripts/retrieval_benchmark.py --config config/test.yaml  # 阶段1：RAG 离线基准
-python scripts/run_all.py --config config/test.yaml              # 全链路 + 阶段验收报告
+# A. 手写 jsonl：直接编辑 datasets/golden_sample.jsonl
+# B. xlsx 转换：120 条 → xlsx_golden.jsonl（RET/RER/ANS/CIT/REF 84 条）
+#                + xlsx_parse_baseline.jsonl（PAR/CHK 36 条）
+python scripts/import_xlsx_cases.py --xlsx 企业RAG全环节测试集_600MW.xlsx
 ```
 
-单项运行：
+### 步骤 1：校验与覆盖率（无需服务）
+
+```bash
+python scripts/validate_dataset.py datasets/xlsx_golden.jsonl   # 字段/拒答/行列/顺序/审核校验
+python scripts/coverage_check.py datasets/xlsx_golden.jsonl     # §11 配额/章节/表格占比缺口
+```
+
+### 步骤 2：原文解析评测（§5）
+
+```bash
+# 自建基线（二选一）：从 DOCX 独立提取，或直接用 xlsx 转换的 parse 基线
+python scripts/extract_docx_baseline.py --docx 600MW规程.docx --out datasets/parse_baseline.jsonl
+# 比对：在线拉取 RAGFlow Chunk，或离线用 --chunks-file
+python scripts/parse_benchmark.py --baseline datasets/xlsx_parse_baseline.jsonl \
+    --config config/test.yaml --dataset-id <KB_ID> --document-id <DOC_ID>
+# 产物 results/<exp>/parse_summary.json（DATA-01 四项）+ parse_anomalies.jsonl（待§5.3人工复核）
+```
+
+### 步骤 3：入库映射 Chunk（xlsx 转换集必需，手写集已内置）
+
+```bash
+# 1) 对 needs_chunk_mapping=true 的用例跑检索，输出候选清单
+python scripts/assist_chunk_mapping.py --golden datasets/xlsx_golden.jsonl \
+    --config config/test.yaml --out /tmp/chunk_candidates.jsonl
+# 2) 人工确认后写回（mapping.jsonl: question_id/expected_chunk/acceptable_chunks）
+python scripts/assist_chunk_mapping.py --apply mapping.jsonl \
+    --in-golden datasets/xlsx_golden.jsonl --out-golden datasets/xlsx_golden.jsonl
+```
+
+### 步骤 4：健康检查与冒烟
 
 ```bash
 python scripts/health_check.py --config config/test.yaml
+```
+
+### 步骤 5：检索/重排基准（阶段 1，可分环节）
+
+```bash
+# run.dataset 指向 xlsx_golden.jsonl，run.stages 取 ["retrieval", "rerank"]，retrieval_only=true
 python scripts/retrieval_benchmark.py --config config/test.yaml
+```
+
+### 步骤 6：全链路问答（阶段 2，含拒答）
+
+```bash
+# run.stages 取 ["qa", "refusal"]（或 null 全量），retrieval_only=false
+python scripts/run_all.py --config config/test.yaml
+# 单项运行：
 python scripts/generation_benchmark.py --config config/test.yaml
 ```
 
-产物（`results/<experiment_id>/`）：`per_question.jsonl`（对齐 xlsx「测试结果模板」列）、
-`summary.json`、`report.md`（阶段1门判定 + 一票否决扫描）、
+### 步骤 7：复核与写回
+
+```bash
+# 半自动复核：results/<experiment_id>/review_queue.jsonl + review_prompts.jsonl
+# 写回 xlsx 执行记录（默认写副本，--in-place 覆盖前请备份）：
+python scripts/export_xlsx_record.py --xlsx 企业RAG全环节测试集_600MW.xlsx \
+    --per-question results/<experiment_id>/per_question.jsonl \
+    --summary results/<experiment_id>/summary.json --batch EXP-001 --tester 张三
+```
+
+## 产物（`results/<experiment_id>/`）
+
+`per_question.jsonl`（对齐 xlsx「测试结果模板」列，含失败归因与场景编号）、
+`summary.json`、`report.md`（阶段门判定 + 一票否决扫描 + **场景闭环**汇总 + RER-Top3）、
 `review_queue.jsonl` + `review_prompts.jsonl`（半自动复核）。
 
 ## 验证（无需 RAGFlow 服务）
@@ -71,5 +136,7 @@ python -m pytest tests/ -q
 ## 注意
 
 正式投入测试前，应先用 10~20 道人工确认过的黄金问题验证
-`document_ids` / `chunk_ids` / `required_facts` / `forbidden_facts` 标注，
-再扩展到 500~1000 题。
+`document_ids` / `chunk_ids` / `expected_answer_points` / `forbidden_claims` 标注，
+再按 §11 配额扩展到 120 条核心集（表格≥20%），最后到 300~500 题。
+xlsx 转换集全量题均为 `pending` 待审核，安全关键题须专业人员确认后才进入正式金标准；
+RET/RER 题须先完成 Chunk 映射，否则检索指标不计分母。
