@@ -32,6 +32,8 @@ def attribute_failure(row: Dict) -> Optional[str]:
         if row.get("abstention_correct") == 0:
             return "policy"
         return None
+    if row.get("needs_chunk_mapping") and row.get("Top@5") is None:
+        return None
     hit_rank = row.get("hit_rank")
     if hit_rank is None:
         if row.get("Top@5") == 0:

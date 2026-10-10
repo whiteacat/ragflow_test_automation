@@ -63,9 +63,16 @@ def main(path: str) -> int:
                 warns.append(f"{qid}: 字段 {dep} 已废弃（见 DATASET_SPEC.md），请改用规范键")
             should_refuse = bool(d.get("should_refuse", d.get("must_abstain", False))
                                  or d.get("answerable") is False)
-            if d.get("answerable") and not (d.get("chunk_ids") or d.get("document_ids")
-                                            or d.get("expected_chunk")):
-                errs.append(f"{qid}: 可答题但无 chunk_ids/document_ids/expected_chunk（RAG 指标无法计算）")
+            has_evidence_link = bool(d.get("chunk_ids") or d.get("document_ids")
+                                         or d.get("expected_chunk")
+                                         or d.get("acceptable_chunks"))
+            if d.get("answerable") and not has_evidence_link:
+                if d.get("needs_chunk_mapping"):
+                    warns.append(f"{qid}: 待入库映射预期Chunk（检索指标暂不计分母）")
+                elif str(d.get("test_stage", "qa")) in ("retrieval", "rerank"):
+                    errs.append(f"{qid}: 召回/重排题无 chunk 映射（RAG 指标无法计算）")
+                else:
+                    warns.append(f"{qid}: 无 chunk 映射（RAG 指标暂不计，仅可跑问答规则分）")
             if (not d.get("answerable", True) or d.get("should_refuse")) and not should_refuse:
                 errs.append(f"{qid}: 不可答题请置 should_refuse=true（GEN-05）")
             if should_refuse and not d.get("refusal_reason"):
@@ -74,7 +81,9 @@ def main(path: str) -> int:
                 errs.append(f"{qid}: refusal_reason 非法 {d.get('refusal_reason')}")
             if d.get("attachment_chunk_ids") and not d.get("table_or_item"):
                 warns.append(f"{qid}: 附件题建议补 table_or_item（附件表行列定位）")
-            if qt == "multi_document" and len(d.get("document_ids") or []) < 2:
+            if qt == "multi_document" and (d.get("chunk_ids") or d.get("document_ids")
+                    or d.get("expected_chunk") or d.get("acceptable_chunks")) \
+                    and len(d.get("document_ids") or []) < 2:
                 errs.append(f"{qid}: 跨文档题 document_ids 应>=2（RAG-10）")
             if qt == "table" and not (d.get("table_or_item") or d.get("evidence_text")):
                 warns.append(f"{qid}: 表格题缺 table_or_item/evidence_text（§8.2-6 行列关联）")

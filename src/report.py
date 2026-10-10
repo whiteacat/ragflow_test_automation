@@ -127,6 +127,31 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
                 st[str(r.get("review_status", "?"))] = st.get(
                     str(r.get("review_status", "?")), 0) + 1
             m["_review_status"] = st
+        # 重排 Top3（测试规则：正确依据排在干扰前列；只统计 rerank 环节已召回题）
+        rer = [r for r in rows if r.get("test_stage") == "rerank"
+               and isinstance(r.get("hit_rank"), int)]
+        if rer:
+            m["RER-Top3"] = {"value": sum(1 for r in rer if r["hit_rank"] <= 3) / len(rer),
+                             "n": len(rer),
+                             "note": "测试规则口径：正确依据进前3；未召回题不计"}
+        # 场景闭环汇总（同一 scenario_id 跨环节归组；任一环节失败即该场景修复优先）
+        veto_ids = {v["question_id"] for v in m.get("_vetos", [])}
+        scn: dict = {}
+        for r in rows:
+            sid = r.get("scenario_id") or ""
+            if not sid:
+                continue
+            s = scn.setdefault(sid, {"n": 0, "stages": set(), "failed": set()})
+            s["n"] += 1
+            s["stages"].add(str(r.get("test_stage", "?")))
+            if (r.get("question_id") in veto_ids or r.get("failure_attribution")
+                    or r.get("abstention_correct") == 0):
+                s["failed"].add(r["question_id"])
+        if scn:
+            m["_scenarios"] = {
+                sid: {"n": v["n"], "stages": sorted(v["stages"]),
+                      "pass": not v["failed"], "failed": sorted(v["failed"])}
+                for sid, v in sorted(scn.items())}
 
     # 阈值判定（只判有值项）
     verdicts = {}
@@ -202,6 +227,15 @@ def render_markdown(rep: Dict[str, Any]) -> str:
         L.append(f"## ⚠️ 一票否决疑似 {rep['veto_count']} 项（须人工确认）")
         for x in rep["metrics"].get("_vetos", []):
             L.append(f"- {x['question_id']}: {x['veto']}")
+    scns = rep["metrics"].get("_scenarios")
+    if scns:
+        n_fail = sum(1 for v in scns.values() if not v["pass"])
+        L.append("")
+        L.append(f"## 场景闭环（{len(scns)} 个场景，{n_fail} 个有环节失败）")
+        for sid, v in scns.items():
+            icon = "✅" if v["pass"] else "❌"
+            L.append(f"- {icon} {sid}: n={v['n']} 环节={','.join(v['stages'])}"
+                     + ("" if v["pass"] else f" 失败={','.join(v['failed'])}"))
     L.append("")
     L.append(f"## 延迟 P50/P95\n- {rep['latency']}")
     L.append("")

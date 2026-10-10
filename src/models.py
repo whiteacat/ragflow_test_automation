@@ -79,6 +79,10 @@ class GoldenItem:
     expected_version: Optional[str] = None
     source_version: str = ""              # Table9：受控原文版本（如 20230831）
     source_hash: str = ""                 # §5.1/§10：原文文件哈希，可重复性绑定
+    scenario_id: str = ""                 # 全环节场景编号（如 SCN-001；同一场景跨环节归组）
+    verify_method: str = ""               # xlsx 验证方式（如 自动测试/自动比对+人工复核）
+    source_ref: str = ""                  # 用例来源定位（如 测试用例总表#R42）
+    needs_chunk_mapping: bool = False     # 入库后待映射预期 Chunk（映射前检索指标不计分母）
     reviewer: str = ""                    # 正式集必填
     review_status: str = "pending"        # pending/approved/rejected/deprecated
     remarks: str = ""
@@ -106,11 +110,7 @@ class GoldenItem:
         mandatory = list(d.get("mandatory_points") or [])
         forbidden = list(d.get("forbidden_claims") or d.get("forbidden_facts") or [])
         chunk_ids = list(d.get("chunk_ids") or [])
-        if d.get("expected_chunk") and str(d["expected_chunk"]) not in chunk_ids:
-            chunk_ids = chunk_ids + [str(d["expected_chunk"])]
         doc_ids = list(d.get("document_ids") or [])
-        if d.get("expected_document") and str(d["expected_document"]) not in doc_ids:
-            doc_ids = doc_ids + [str(d["expected_document"])]
         should_refuse = bool(d.get("should_refuse", d.get("must_abstain",
                                not d.get("answerable", True))))
         qtype = str(d.get("question_type", "fact"))
@@ -149,6 +149,10 @@ class GoldenItem:
             expected_version=d.get("expected_version"),
             source_version=str(d.get("source_version", "")),
             source_hash=str(d.get("source_hash", "")),
+            scenario_id=str(d.get("scenario_id", "")),
+            verify_method=str(d.get("verify_method", "")),
+            source_ref=str(d.get("source_ref", "")),
+            needs_chunk_mapping=bool(d.get("needs_chunk_mapping", False)),
             reviewer=str(d.get("reviewer", "")),
             review_status=str(d.get("review_status", "pending")),
             remarks=str(d.get("remarks", "")),

@@ -16,6 +16,9 @@ def _norm(s: str) -> str:
 
 
 def _gold_sets(golden: GoldenItem):
+    if (golden.needs_chunk_mapping and not golden.chunk_ids
+            and not golden.acceptable_chunks):
+        return set(), set()
     chunks = {_norm(c) for c in golden.chunk_ids if c}
     if golden.expected_chunk:
         chunks.add(_norm(golden.expected_chunk))
@@ -40,7 +43,8 @@ def first_hit_rank(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional
 
 def hit_at_k(golden: GoldenItem, chunks: List[RetrievedChunk], k: int) -> Optional[int]:
     """Top@k 命中=1/未命中=0；golden 无证据标注返回 None（不计入分母）。"""
-    if not golden.chunk_ids and not golden.document_ids:
+    gc, gd = _gold_sets(golden)
+    if not gc and not gd:
         return None
     rank = first_hit_rank(golden, chunks)
     if rank is None:
@@ -51,7 +55,8 @@ def hit_at_k(golden: GoldenItem, chunks: List[RetrievedChunk], k: int) -> Option
 def reciprocal_rank(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional[float]:
     rank = first_hit_rank(golden, chunks)
     if rank is None:
-        if not golden.chunk_ids and not golden.document_ids:
+        gc, gd = _gold_sets(golden)
+        if not gc and not gd:
             return None
         return 0.0
     return 1.0 / rank
@@ -59,7 +64,8 @@ def reciprocal_rank(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optiona
 
 def ndcg_at_10(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional[float]:
     """NDCG@10。relevance 缺省时 golden chunk 全按等级 1 计。"""
-    if not golden.chunk_ids and not golden.document_ids:
+    gc, gd = _gold_sets(golden)
+    if not gc and not gd:
         return None
     if golden.relevance:
         rel = {_norm(k): int(v) for k, v in golden.relevance.items()}

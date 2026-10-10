@@ -130,7 +130,7 @@ def test_table9_new_keys():
                               "expected_chunk": "CX", "acceptable_chunks": ["CY"],
                               "refusal_reason": "", "review_status": "approved",
                               "reviewer": "张工"})
-    assert g.question_id == "PAR-1" and "CX" in g.chunk_ids
+    assert g.question_id == "PAR-1" and g.expected_chunk == "CX"
     cs = mk(["CY"])
     assert hit_at_k(g, cs, 5) == 1
 

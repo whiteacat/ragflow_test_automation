@@ -80,6 +80,11 @@ def run(cfg_path: str) -> Dict[str, Any]:
     chat_id: str = str(rag.get("chat_id") or "")
 
     golden_raw = load_golden(run_cfg["dataset"], run_cfg.get("max_questions"))
+    stages = run_cfg.get("stages")  # 如 [retrieval, rerank] 则只跑对应环节
+    if stages:
+        wanted = {str(s) for s in stages}
+        golden_raw = [g for g in golden_raw
+                      if str(GoldenItem.from_dict(g).test_stage) in wanted]
     ds_info = dataset_fingerprint(run_cfg["dataset"], golden_raw)
     retrieval_only = bool(run_cfg.get("retrieval_only", False))
     qps = float(run_cfg.get("qps", 2) or 2)
@@ -155,6 +160,10 @@ def run(cfg_path: str) -> Dict[str, Any]:
                 "source_version": item.source_version,
                 "reviewer": item.reviewer,
                 "review_status": item.review_status,
+                "scenario_id": item.scenario_id,
+                "verify_method": item.verify_method,
+                "source_ref": item.source_ref,
+                "needs_chunk_mapping": item.needs_chunk_mapping,
             })
             row["failure_attribution"] = attribute_failure(row)
             e2e_all.append(row["e2e_latency_ms"])
@@ -168,6 +177,10 @@ def run(cfg_path: str) -> Dict[str, Any]:
                 "refusal_reason": item.refusal_reason,
                 "source_version": item.source_version,
                 "review_status": item.review_status,
+                "scenario_id": item.scenario_id,
+                "verify_method": item.verify_method,
+                "source_ref": item.source_ref,
+                "needs_chunk_mapping": item.needs_chunk_mapping,
             })
             row["failure_attribution"] = attribute_failure(row)
             row["e2e_latency_ms"] = ret["latency_ms"]
