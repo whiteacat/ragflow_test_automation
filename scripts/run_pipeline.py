@@ -37,6 +37,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config/test.yaml")
     ap.add_argument("--xlsx", default="企业RAG全环节测试集_600MW.xlsx")
+    ap.add_argument("--golden", default="datasets/xlsx_golden.jsonl")
+    ap.add_argument("--baseline", default="datasets/xlsx_parse_baseline.jsonl")
     ap.add_argument("--batch", default="EXP-001")
     ap.add_argument("--tester", default="")
     ap.add_argument("--stages", nargs="*", default=[])
@@ -48,8 +50,8 @@ def main() -> int:
     ap.add_argument("--skip-export", action="store_true")
     args = ap.parse_args()
 
-    golden = "datasets/xlsx_golden.jsonl"
-    baseline = "datasets/xlsx_parse_baseline.jsonl"
+    golden = args.golden
+    baseline = args.baseline
     ok = True
 
     if not sh("0. 校验问答集", PY, "scripts/validate_dataset.py", golden):
@@ -78,19 +80,20 @@ def main() -> int:
     if not sh("3. 健康检查", PY, "scripts/health_check.py", "--config", args.config):
         print("服务不通，后续在线步骤将失败，如需只做离线校验请 Ctrl-C。")
 
-    env = os.environ.copy()
+    import yaml  # noqa: E402
+    with open(args.config, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    cfg.setdefault("run", {})["dataset"] = golden
     run_cfg = args.config
     if args.stages:
-        import yaml  # noqa: E402
-        with open(args.config, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        cfg.setdefault("run", {})["stages"] = args.stages
-        tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False,
-                                          encoding="utf-8")
-        yaml.safe_dump(cfg, tmp, allow_unicode=True)
-        tmp.close()
-        run_cfg = tmp.name
-        print(f"本次问答环节子集：{args.stages}（已覆写 run.stages）")
+        cfg["run"]["stages"] = args.stages
+    tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False,
+                                      encoding="utf-8")
+    yaml.safe_dump(cfg, tmp, allow_unicode=True)
+    tmp.close()
+    run_cfg = tmp.name
+    print(f"本次问答集：{golden}"
+          + (f"，环节子集：{args.stages}" if args.stages else "（全环节）"))
     if not sh("4. 全链路执行", PY, "scripts/run_all.py", "--config", run_cfg):
         ok = False
 
