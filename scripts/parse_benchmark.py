@@ -40,6 +40,10 @@ def load_baseline(path: str):
 
 
 def load_chunks_file(path: str) -> str:
+    return "\n".join(load_chunks_list(path))
+
+
+def load_chunks_list(path: str) -> list:
     parts = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -48,7 +52,7 @@ def load_chunks_file(path: str) -> str:
                 continue
             d = json.loads(line)
             parts.append(str(d.get("content") or d.get("text") or ""))
-    return "\n".join(parts)
+    return parts
 
 
 def main() -> None:
@@ -63,7 +67,8 @@ def main() -> None:
 
     meta, recs = load_baseline(args.baseline)
     if args.chunks_file:
-        full = load_chunks_file(args.chunks_file)
+        contents = load_chunks_list(args.chunks_file)
+        full = "\n".join(contents)
         parsed_note = f"offline:{args.chunks_file}"
     else:
         from src.config import load_config  # noqa: E402
@@ -76,8 +81,18 @@ def main() -> None:
             sys.exit(2)
         client = RAGFlowClient(rag["base_url"], rag["api_key"],
                                timeout_s=int(rag.get("timeout_s", 60)))
+        try:
+            info = client.get_document(ds, args.document_id)
+            doc = info.get("data", info) if isinstance(info, dict) else {}
+            prog = doc.get("progress")
+            if isinstance(prog, (int, float)) and prog < 1.0:
+                print(f"警告：文档解析进度 {prog} 未完成，比对结果可能误报缺失，"
+                      f"待解析完成后重跑。")
+        except Exception as exc:  # noqa: BLE001 — 进度查询失败不阻断比对
+            print(f"提示：文档进度查询失败（{exc}），直接比对。")
         chunks = client.list_all_chunks(ds, args.document_id)
-        full = "\n".join(c.content for c in chunks)
+        contents = [c.content or "" for c in chunks]
+        full = "\n".join(contents)
         parsed_note = f"ragflow:{ds}/{args.document_id} n_chunks={len(chunks)}"
     norm_full = normalize_text(full)
     counts = Counter()
@@ -123,6 +138,19 @@ def main() -> None:
     head_v, head_n = rate("heading")
     num_v, num_n = rate("number_unit")
     cell_v, cell_n = rate("table_cell")
+    bl_clauses = set()
+    for r in recs:
+        t = normalize_text(r.get("text", ""))
+        bl_clauses.add(t)
+        import re as _re2
+        bl_clauses.update(normalize_text(p) for p in
+                          _re2.split(r"[；;，。,、|\n｜]", r.get("text", "") or "")
+                          if len(normalize_text(p)) >= 10)
+    bl_clauses.discard("")
+    non_empty = [c for c in contents if normalize_text(c)]
+    loc_ok = sum(1 for c in non_empty
+                 if any(cl in normalize_text(c) for cl in bl_clauses))
+    loc_v = (loc_ok / len(non_empty)) if non_empty else None
     summary = {
         "baseline_file": args.baseline,
         "baseline_meta": meta,
@@ -131,6 +159,8 @@ def main() -> None:
         "DATA-01-title": {"value": head_v, "n": head_n},
         "DATA-01-number": {"value": num_v, "n": num_n},
         "DATA-01-table": {"value": cell_v, "n": cell_n},
+        "DATA-01-locate": {"value": loc_v, "n": len(non_empty),
+                           "note": "Chunk正向可在基线中找到出处占比"},
         "duplicate_rate": round(dup_rate, 4),
         "n_anomalies": len(anomalies),
     }

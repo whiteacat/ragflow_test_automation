@@ -57,6 +57,7 @@ cp config/test.yaml.example config/test.yaml
 python scripts/run_pipeline.py --config config/test.yaml \
     --xlsx 企业RAG全环节测试集_600MW.xlsx --batch EXP-001
 # 子集：--stages retrieval rerank qa refusal；跳步：--skip-parse/--skip-mapping/--skip-export
+# 换数据集：--golden datasets/golden_sample.jsonl --baseline datasets/parse_golden_sample.jsonl
 # 映射：--apply-mapping mapping.jsonl；解析覆盖：--dataset-id KB --document-id DOC
 ```
 

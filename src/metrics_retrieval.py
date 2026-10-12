@@ -39,6 +39,8 @@ def first_hit_rank(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional
             return c.rank
         if _norm(c.document_id) and _norm(c.document_id) in gold_docs:
             return c.rank
+        if _norm(c.document_name) and _norm(c.document_name) in gold_docs:
+            return c.rank
     return None
 
 
@@ -71,14 +73,17 @@ def ndcg_at_10(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional[flo
     if golden.relevance:
         rel = {_norm(k): int(v) for k, v in golden.relevance.items()}
     else:
-        rel = {_norm(c): 1 for c in golden.chunk_ids}
-        for d in golden.document_ids:
-            rel.setdefault(_norm(d), 1)
+        gold_chunks, gold_docs = _gold_sets(golden)
+        rel = {c: 1 for c in gold_chunks}
+        for d in gold_docs:
+            rel.setdefault(d, 1)
 
     def gain(c: RetrievedChunk) -> int:
         g = rel.get(_norm(c.chunk_id), 0)
         if g == 0 and _norm(c.document_id) in rel:
             g = rel[_norm(c.document_id)]
+        if g == 0 and _norm(c.document_name) in rel:
+            g = rel[_norm(c.document_name)]
         return g
 
     dcg = 0.0

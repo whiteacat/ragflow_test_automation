@@ -43,6 +43,8 @@ QTYPE_MAP: Dict[str, Tuple[str, str]] = {
 
 TABLE_RE = re.compile(r"表T\d+")
 FORBID_RE = re.compile(r"禁止[:：]")
+REVIEW_MAP = {"待审核": "pending", "审核通过": "approved", "通过": "approved",
+              "退回": "rejected", "停用": "deprecated"}
 
 
 def split_expectation(exp: str) -> Tuple[List[str], List[str]]:
@@ -144,7 +146,7 @@ def build_golden(scn: str, cid: str, stage_cn: str, qtype_cn: str, question: str
         "source_ref": f"测试用例总表#R{rowno}",
         "needs_chunk_mapping": prefix in ("RET", "RER"),
         "reviewer": "",
-        "review_status": "pending" if "待审核" in audit else "pending",
+        "review_status": REVIEW_MAP.get(audit, "pending"),
         "remarks": "；".join([s for s in
                               ["测试集环节：" + stage_cn,
                                ("阶段预期：" + expect) if is_refusal else "",
@@ -210,7 +212,8 @@ def main() -> None:
     print(f"读入 {len(rows)} 条 → golden {len(golden)} 条 ({args.out_golden}）"
           f"+ parse基线 {len(baseline)} 条 ({args.out_baseline})")
     print(f"环节分布 {dict(stages)}")
-    print(f"全部审核态待审核；source_hash={src_hash[:12] + '…' if src_hash else '空'}；"
+    print(f"审核态分布 {dict(Counter(g.get('review_status', 'pending') for g in golden))}"
+          f"；source_hash={src_hash[:12] + '…' if src_hash else '空'}；"
           f"RET/RER {sum(1 for g in golden if g['needs_chunk_mapping'])} 条待入库映射Chunk")
     if skipped:
         print(f"跳过 {len(skipped)} 条：{skipped[:10]}")

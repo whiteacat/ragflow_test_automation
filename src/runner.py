@@ -105,14 +105,23 @@ def run(cfg_path: str) -> Dict[str, Any]:
         rank_base = r_scores.get("hit_rank")
         rerank_info: dict = {}
         if isinstance(rerank_cmp, list) and len(rerank_cmp) == 2:
-            other = rerank_cmp[1] if ret_cfg.get("rerank_id") == rerank_cmp[0] else rerank_cmp[0]
-            ret2 = _retrieve_with(client, item.question, dataset_ids, ret_cfg,
-                                  rerank_override=other)
-            rank_after = first_hit_rank(item, ret2["chunks"])
-            from .metrics_retrieval import rerank_gain as _rg
-            rerank_info = {"hit_rank_base": rank_base, "hit_rank_rerank": rank_after,
-                           "rerank_gain": _rg(rank_base, rank_after),
-                           "rerank_pair": list(rerank_cmp)}
+            base_side = ret_cfg.get("rerank_id")
+            if base_side != rerank_cmp[0] and base_side != rerank_cmp[1]:
+                print(f"警告 {item.question_id}：rerank_id={base_side} 不在 "
+                      f"rerank_compare={rerank_cmp} 两侧，跳过本次 A/B（请令其等于一侧）")
+            else:
+                other = rerank_cmp[1] if base_side == rerank_cmp[0] else rerank_cmp[0]
+                ret2 = _retrieve_with(client, item.question, dataset_ids, ret_cfg,
+                                      rerank_override=other)
+                rank_after = first_hit_rank(item, ret2["chunks"])
+                from .metrics_retrieval import rerank_gain as _rg
+                rerank_info = {"hit_rank_base": rank_base, "hit_rank_rerank": rank_after,
+                               "rerank_gain": _rg(rank_base, rank_after),
+                               "rerank_pair": list(rerank_cmp),
+                               "rerank_base_side": base_side}
+        elif rerank_cmp is not None:
+            print(f"警告 {item.question_id}：rerank_compare 须为 [关闭值, 开启值] 两元，"
+                  f"当前 {rerank_cmp} 已忽略")
         row: Dict[str, Any] = {
             "question_id": item.question_id,
             "question": item.question,

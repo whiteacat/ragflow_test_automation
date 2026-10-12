@@ -159,7 +159,7 @@ def score_generation_rule(question: dict, answer: str) -> Dict[str, Optional[flo
             bool(question.get("must_abstain", question.get("should_refuse", False))), answer),
         "forbidden_fact_hit": forbidden_hit(forbidden, answer),
         "citation_complete_rule": citation_complete(
-            bool(question.get("must_cite", False)), answer,
+            bool(question.get("must_cite", True)), answer,
             bool(question.get("answerable", True)), abstained),
         "abstained": 1 if abstained else 0,
     }

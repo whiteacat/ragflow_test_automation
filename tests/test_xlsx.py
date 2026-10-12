@@ -133,3 +133,51 @@ def test_apply_auto_mapping_marks_provenance(tmp_path):
     assert d["needs_chunk_mapping"] is False
     assert d["expected_chunk"] == "CHK-1"
     assert "auto-mapped覆盖率0.95" in d["remarks"]
+
+
+def test_gen08_gate_covers_new_accident_types():
+    from src.judge import build_review_queue
+    rows = [
+        {"question_id": "A1", "question_type": "accident_action",
+         "question": "q", "predicted_answer": "a", "golden_answer": "g",
+         "required_facts": [], "forbidden_facts": [], "evidence_snippet": ""},
+        {"question_id": "F1", "question_type": "fact",
+         "question": "q", "predicted_answer": "a", "golden_answer": "g",
+         "required_facts": [], "forbidden_facts": [], "evidence_snippet": ""},
+    ]
+    tasks = {(q["question_id"], q["judge_task"]) for q in build_review_queue(rows)}
+    assert ("A1", "GEN-08") in tasks
+    assert ("F1", "GEN-08") not in tasks
+
+
+def test_must_cite_default_true_in_scoring():
+    from src.metrics_generation import score_generation_rule
+    s = score_generation_rule({"answerable": True}, "结论正确【检修规程V3】。")
+    assert s["citation_complete_rule"] == 1
+
+
+def test_document_name_match_and_ndcg_expected_only():
+    from src.metrics_retrieval import hit_at_k, ndcg_at_10
+    from src.models import GoldenItem
+    g = GoldenItem.from_dict({"question_id": "D", "question": "q",
+                              "expected_document": "规程20230831"})
+    cs = [RetrievedChunk(chunk_id="X", document_id="opaque-id",
+                         document_name="规程20230831", rank=2)]
+    assert hit_at_k(g, cs, 5) == 1
+    g2 = GoldenItem.from_dict({"question_id": "E", "question": "q",
+                               "expected_chunk": "CX"})
+    cs2 = [RetrievedChunk(chunk_id="CX", document_id="D", rank=1)]
+    assert abs(ndcg_at_10(g2, cs2) - 1.0) < 1e-9
+
+
+def test_review_status_mapping():
+    g = build_golden("SCN-001", "RET-001", "召回", "表格参数", "问题？",
+                     "要点：A。", "证据", "位置", "doc.docx", "20230831",
+                     "自动测试", "审核通过", "", 42, "")
+    assert g["review_status"] == "approved"
+
+
+def test_pipeline_report_dir_parsing():
+    from scripts.run_pipeline import report_dir_from_output
+    assert report_dir_from_output("...\n报告目录: results/exp1  待复核") == "results/exp1"
+    assert report_dir_from_output("no marker") == ""

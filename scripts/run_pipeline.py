@@ -33,6 +33,21 @@ def sh(step: str, *cmd: str) -> bool:
     return r.returncode == 0
 
 
+def sh_capture(step: str, *cmd: str) -> tuple[bool, str]:
+    print(f"\n===== {step} =====")
+    print("$ " + " ".join(cmd))
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    sys.stdout.write(r.stdout[-2000:])
+    print(f"----- {step}: {'OK' if r.returncode == 0 else 'FAIL(' + str(r.returncode) + ')'} -----")
+    return r.returncode == 0, r.stdout
+
+
+def report_dir_from_output(output: str) -> str:
+    import re
+    m = re.search(r"报告目录:\s*(\S+)", output)
+    return m.group(1) if m else ""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config/test.yaml")
@@ -94,16 +109,31 @@ def main() -> int:
     run_cfg = tmp.name
     print(f"本次问答集：{golden}"
           + (f"，环节子集：{args.stages}" if args.stages else "（全环节）"))
-    if not sh("4. 全链路执行", PY, "scripts/run_all.py", "--config", run_cfg):
+    run_ok, run_out = sh_capture("4. 全链路执行", PY, "scripts/run_all.py",
+                                 "--config", run_cfg)
+    if not run_ok:
         ok = False
+    try:
+        os.unlink(run_cfg)
+    except OSError:
+        pass
 
     if not args.skip_export and os.path.exists(args.xlsx):
-        import glob
-        outs = sorted(glob.glob("results/*/per_question.jsonl"),
-                      key=os.path.getmtime)
-        if outs:
-            perq = outs[-1]
-            summ = os.path.join(os.path.dirname(perq), "summary.json")
+        perq, summ = "", ""
+        out_dir = report_dir_from_output(run_out)
+        if out_dir and os.path.exists(os.path.join(ROOT, out_dir,
+                                                   "per_question.jsonl")):
+            perq = os.path.join(out_dir, "per_question.jsonl")
+            summ = os.path.join(out_dir, "summary.json")
+        else:
+            import glob
+            outs = sorted(glob.glob("results/*/per_question.jsonl"),
+                          key=os.path.getmtime)
+            if outs:
+                print(f"提示：未定位本次产物目录，回退到最新 {outs[-1]}")
+                perq = outs[-1]
+                summ = os.path.join(os.path.dirname(perq), "summary.json")
+        if perq:
             sh("5. 写回执行记录", PY, "scripts/export_xlsx_record.py",
                "--xlsx", args.xlsx, "--per-question", perq,
                "--summary", summ, "--batch", args.batch,

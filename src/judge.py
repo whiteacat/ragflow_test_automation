@@ -11,6 +11,9 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+STEP_TYPES_FOR_GEN08 = ("procedure", "accident", "accident_action",
+                        "accident_cause", "accident_symptom")
+
 JUDGE_TASKS = {
     "GEN-01": "答案准确率：对照 golden_answer + expected_answer_points，0=错误/关键事实错，1=基本正确但缺次要信息，2=正确完整。2分计正确。",
     "GEN-03": "答案完整率：expected_answer_points 是否全部完整表达（含条件/例外）。",
@@ -51,7 +54,7 @@ def build_review_queue(items: List[Dict[str, Any]],
     queue = []
     for it in items:
         for t in tasks:
-            if t in ("GEN-08",) and it.get("question_type") not in ("procedure", "accident"):
+            if t in ("GEN-08",) and it.get("question_type") not in STEP_TYPES_FOR_GEN08:
                 continue
             queue.append({
                 "question_id": it.get("question_id"),
