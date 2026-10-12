@@ -52,7 +52,19 @@
 - `should_refuse = should_refuse ⏷ must_abstain ⏷ ¬answerable`；`answerable` 缺省取反。
 - `expected_answer_points = expected_answer_points ⏷ required_facts ⏷ golden_facts`。
 - `must_cite` 缺省 `true`；拒答/不可答题不计 GEN-10。
-- `expected_chunk/document` 自动并入 `chunk_ids/document_ids`。
+- `expected_chunk/document` 仅作信息记录，**不再自动并入** `chunk_ids/document_ids`
+  （检索命中只认后两者 + `acceptable_chunks`；待映射题置 `needs_chunk_mapping=true`）。
+
+## 旧文件迁移
+
+手写旧键文件可直接跑（读兼容），建议用迁移脚本一次性转规范键（试运行先看报告）：
+
+```bash
+python scripts/migrate_dataset.py datasets/golden_sample.jsonl          # 试运行
+python scripts/migrate_dataset.py datasets/golden_sample.jsonl --write  # 落盘
+```
+
+`evidence_text/chapter_path/refusal_reason` 缺失无法推导，迁移后按 `validate` 告警人工补。
 
 ## 最小示例
 
@@ -113,3 +125,8 @@ python scripts/import_xlsx_cases.py --xlsx 企业RAG全环节测试集_600MW.xls
 测试规则（该表测试规则 sheet）：召回 Top10、重排 Top3、关键要点 100%——
 对应本项目 RAG-02（Top@10）、报告 `RER-Top3`、GEN-02；失败按最早环节归因八类，
 场景闭环汇总见报告 `_scenarios`/“场景闭环”节。
+
+未映射题的两条出路：内容口径（`evidence_recall@5/@10`：证据分句在 TopK 内容中的
+覆盖率，无需 Chunk ID 即可出下限分，映射后以 RAG-01/02 为准）；自动映射
+（`assist_chunk_mapping.py --auto-map mapping_auto.jsonl --threshold 0.8`，
+证据覆盖率达阈值自动转正并记 `auto-mapped覆盖率` 备查，低于阈值转人工）。

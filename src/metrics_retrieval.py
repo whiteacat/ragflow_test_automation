@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Dict, List, Optional
 
 from .models import GoldenItem, RetrievedChunk
@@ -122,6 +123,27 @@ def rerank_gain(rank_before: Optional[int], rank_after: Optional[int]) -> Option
     if rank_after == rank_before:
         return 0
     return -1
+
+
+def split_clauses(text: str) -> List[str]:
+    return [p.strip() for p in re.split(r"[；;。\n|｜]", text or "")
+            if len(_norm(p)) >= 4]
+
+
+def evidence_cover(evidence: str, contents: List[str]) -> Optional[float]:
+    clauses = split_clauses(evidence)
+    if not clauses:
+        return None
+    norm_full = _norm("\n".join(contents))
+    hits = sum(1 for c in clauses if _norm(c) in norm_full)
+    return hits / len(clauses)
+
+
+def evidence_recall_at_k(evidence: str, chunks: List[RetrievedChunk],
+                         k: int) -> Optional[float]:
+    if not (evidence or "").strip():
+        return None
+    return evidence_cover(evidence, [c.content or "" for c in chunks[:k]])
 
 
 def paraphrase_group_recall(rows: List[Dict]) -> Dict[str, float]:

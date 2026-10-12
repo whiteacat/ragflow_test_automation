@@ -9,6 +9,10 @@
          --in-golden datasets/xlsx_golden.jsonl --out-golden datasets/xlsx_golden.jsonl
    mapping.jsonl 每行：{"question_id": "RET-001", "expected_chunk": "CHK-..",
                         "acceptable_chunks": ["CHK-.."], "expected_document": "DOC-.."}
+3. auto-map：用证据分句覆盖率自动对齐，高于阈值直接生成 mapping 文件
+     python scripts/assist_chunk_mapping.py --auto-map mapping_auto.jsonl \\
+         --golden datasets/xlsx_golden.jsonl --threshold 0.8
+   （之后人工抽查，再走第 2 步 apply；低于阈值的题留在文件内待人工）
 """
 from __future__ import annotations
 
@@ -18,6 +22,21 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from src.metrics_retrieval import evidence_cover  # noqa: E402
+
+
+def _retrieve_top(client, ds, ret_cfg, question):
+    return client.retrieve(
+        question, ds,
+        page=int(ret_cfg.get("page", 1)),
+        page_size=int(ret_cfg.get("page_size", 30)),
+        top_k=int(ret_cfg.get("top_k", 1024)),
+        similarity_threshold=float(ret_cfg.get("similarity_threshold", 0.2)),
+        vector_similarity_weight=float(
+            ret_cfg.get("vector_similarity_weight", 0.3)),
+        keyword=bool(ret_cfg.get("keyword", False)),
+        highlight=bool(ret_cfg.get("highlight", False)),
+        rerank_id=ret_cfg.get("rerank_id"))
 
 
 def assist(golden_path: str, cfg_path: str, out: str, topn: int) -> None:
@@ -36,17 +55,7 @@ def assist(golden_path: str, cfg_path: str, out: str, topn: int) -> None:
             g = json.loads(line)
             if not g.get("needs_chunk_mapping"):
                 continue
-            ret = client.retrieve(
-                g["question"], ds,
-                page=int(ret_cfg.get("page", 1)),
-                page_size=int(ret_cfg.get("page_size", 30)),
-                top_k=int(ret_cfg.get("top_k", 1024)),
-                similarity_threshold=float(ret_cfg.get("similarity_threshold", 0.2)),
-                vector_similarity_weight=float(
-                    ret_cfg.get("vector_similarity_weight", 0.3)),
-                keyword=bool(ret_cfg.get("keyword", False)),
-                highlight=bool(ret_cfg.get("highlight", False)),
-                rerank_id=ret_cfg.get("rerank_id"))
+            ret = _retrieve_top(client, ds, ret_cfg, g["question"])
             f.write(json.dumps({
                 "question_id": g["question_id"],
                 "question": g["question"],
@@ -81,12 +90,50 @@ def apply(mapping_path: str, in_golden: str, out_golden: str) -> None:
                 g["expected_document"] = m["expected_document"]
             if g.get("expected_chunk") or g.get("acceptable_chunks"):
                 g["needs_chunk_mapping"] = False
+            if m.get("auto_coverage") is not None:
+                g["remarks"] = (g.get("remarks") or "") + (
+                    f"；auto-mapped覆盖率{m['auto_coverage']}" if g.get("remarks")
+                    else f"auto-mapped覆盖率{m['auto_coverage']}")
             hit += 1
         rows.append(g)
     with open(out_golden, "w", encoding="utf-8") as f:
         for g in rows:
             f.write(json.dumps(g, ensure_ascii=False) + "\n")
     print(f"映射 {hit}/{len(mp)} 题 → {out_golden}")
+
+
+def auto_map(golden_path: str, cfg_path: str, out: str, threshold: float,
+             topn: int) -> None:
+    from src.config import load_config  # noqa: E402
+    from src.ragflow_client import RAGFlowClient  # noqa: E402
+    cfg = load_config(cfg_path)
+    rag, ret_cfg = cfg["ragflow"], cfg.get("retrieval", {})
+    client = RAGFlowClient(rag["base_url"], rag["api_key"],
+                           timeout_s=int(rag.get("timeout_s", 60)))
+    ds = list(rag.get("dataset_ids") or [])
+    auto, manual = 0, []
+    with open(out, "w", encoding="utf-8") as f:
+        for line in open(golden_path, encoding="utf-8"):
+            if not line.strip():
+                continue
+            g = json.loads(line)
+            if not g.get("needs_chunk_mapping") or not (g.get("evidence_text") or ""):
+                continue
+            ret = _retrieve_top(client, ds, ret_cfg, g["question"])
+            scored = [(evidence_cover(g["evidence_text"], [c.content or ""]) or 0.0, c)
+                      for c in ret["chunks"][:topn]]
+            scored.sort(key=lambda t: -t[0])
+            best, chunk = scored[0] if scored else (0.0, None)
+            if chunk is not None and best >= threshold:
+                f.write(json.dumps({
+                    "question_id": g["question_id"],
+                    "expected_chunk": chunk.chunk_id,
+                    "expected_document": chunk.document_id,
+                    "auto_coverage": round(best, 3)}, ensure_ascii=False) + "\n")
+                auto += 1
+            else:
+                manual.append((g["question_id"], round(best, 3)))
+    print(f"自动映射 {auto} 题 → {out}；低于阈值转人工 {len(manual)} 题：{manual[:10]}")
 
 
 def main() -> None:
@@ -98,10 +145,15 @@ def main() -> None:
     ap.add_argument("--apply", default="")
     ap.add_argument("--in-golden", default="")
     ap.add_argument("--out-golden", default="")
+    ap.add_argument("--auto-map", default="")
+    ap.add_argument("--threshold", type=float, default=0.8)
     args = ap.parse_args()
     if args.apply:
         apply(args.apply, args.in_golden or args.golden,
               args.out_golden or args.golden)
+    elif args.auto_map:
+        auto_map(args.golden, args.config, args.auto_map,
+                 args.threshold, args.topn)
     else:
         assist(args.golden, args.config, args.out, args.topn)
 

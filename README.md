@@ -63,7 +63,8 @@ python scripts/run_pipeline.py --config config/test.yaml \
 各步骤也可单独执行：
 
 ```bash
-# A. 手写 jsonl：直接编辑 datasets/golden_sample.jsonl
+# A. 手写 jsonl：直接编辑 datasets/golden_sample.jsonl，旧键可先迁移再补证据链
+python scripts/migrate_dataset.py datasets/golden_sample.jsonl --write
 # B. xlsx 转换：120 条 → xlsx_golden.jsonl（RET/RER/ANS/CIT/REF 84 条）
 #                + xlsx_parse_baseline.jsonl（PAR/CHK 36 条）
 python scripts/import_xlsx_cases.py --xlsx 企业RAG全环节测试集_600MW.xlsx

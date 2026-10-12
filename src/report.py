@@ -47,6 +47,13 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
     m["RAG-09"] = {"value": v, "n": n}
     v, n, _ = _rate(rows, "cross_doc_complete")
     m["RAG-10"] = {"value": v, "n": n}
+    for key, mid in [("evidence_recall@5", "RAG-evidence@5"),
+                     ("evidence_recall@10", "RAG-evidence@10")]:
+        v, n, _ = _rate(answerable, key)
+        if n:
+            m[mid] = {"value": v, "n": n,
+                      "note": "内容口径规则版：证据分句在TopK内容中的覆盖率；"
+                              "ID映射完成后以RAG-01/02为准"}
 
     if not retrieval_only:
         # GEN 规则版（全自动部分）

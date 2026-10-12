@@ -34,6 +34,7 @@ def load_baseline(path: str):
             if d.get("record_id") == "_FILE_":
                 meta = d
             else:
+                d.setdefault("record_id", d.get("block_id", ""))
                 recs.append(d)
     return meta, recs
 

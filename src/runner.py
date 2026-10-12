@@ -18,7 +18,7 @@ from .config import load_config
 from .attribution import attribute_failure
 from .judge import build_review_queue
 from .metrics_generation import latency_stats, score_generation_rule
-from .metrics_retrieval import first_hit_rank, score_retrieval
+from .metrics_retrieval import evidence_recall_at_k, first_hit_rank, score_retrieval
 from .models import GoldenItem
 from .ragflow_client import RAGFlowClient
 from .report import build_report
@@ -125,6 +125,10 @@ def run(cfg_path: str) -> Dict[str, Any]:
             "answerable": item.answerable,
             **{k: v for k, v in r_scores.items()},
             **rerank_info,
+            "evidence_recall@5": evidence_recall_at_k(
+                item.evidence_text, chunks, 5),
+            "evidence_recall@10": evidence_recall_at_k(
+                item.evidence_text, chunks, 10),
             "retrieval_latency_ms": ret["latency_ms"],
             "evidence_snippet": "\n".join(
                 f"[{c.rank}] {c.document_name}#{c.chunk_id}: {c.content[:300]}"

@@ -11,6 +11,8 @@ from scripts.import_xlsx_cases import (  # noqa: E402
     split_expectation,
     strip_version,
 )
+from src.metrics_retrieval import evidence_cover, evidence_recall_at_k  # noqa: E402
+from src.models import RetrievedChunk  # noqa: E402
 from src.report import build_report  # noqa: E402
 from src.metrics_generation import latency_stats  # noqa: E402
 
@@ -100,3 +102,34 @@ def test_report_scenario_rollup_and_rerank_top3():
     scn = rep["metrics"]["_scenarios"]["SCN-001"]
     assert scn["n"] == 3 and scn["pass"] is False
     assert scn["failed"] == ["ANS-001"]
+
+
+def test_evidence_cover():
+    assert evidence_cover("", ["anything"]) is None
+    assert evidence_cover("水压试验18.84MPa；超压试验23.55MPa。",
+                          ["水压试验18.84MPa，超压试验23.55MPa。"]) == 1.0
+    assert evidence_cover("A1111；B2222；C3333。", ["A1111"]) == 1 / 3
+    chunks = [RetrievedChunk(chunk_id="C1", rank=1, content="超压试验23.55MPa")]
+    assert evidence_recall_at_k("超压试验23.55MPa。", chunks, 5) == 1.0
+    assert evidence_recall_at_k("", chunks, 5) is None
+
+
+def test_apply_auto_mapping_marks_provenance(tmp_path):
+    from scripts.assist_chunk_mapping import apply
+    golden = tmp_path / "g.jsonl"
+    golden.write_text(json.dumps({
+        "question_id": "RET-001", "needs_chunk_mapping": True,
+        "remarks": "测试集环节：召回"}) + "\n",
+        encoding="utf-8")
+    mapping = tmp_path / "m.jsonl"
+    mapping.write_text(json.dumps({
+        "question_id": "RET-001", "expected_chunk": "CHK-1",
+        "expected_document": "DOC-1",
+        "auto_coverage": 0.95}) + "\n",
+        encoding="utf-8")
+    out = tmp_path / "o.jsonl"
+    apply(str(mapping), str(golden), str(out))
+    d = json.loads(out.read_text(encoding="utf-8"))
+    assert d["needs_chunk_mapping"] is False
+    assert d["expected_chunk"] == "CHK-1"
+    assert "auto-mapped覆盖率0.95" in d["remarks"]
