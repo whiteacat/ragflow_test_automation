@@ -96,9 +96,34 @@ def run(cfg_path: str) -> Dict[str, Any]:
     e2e_all: List[float] = []
     for g in golden_raw:
         item = GoldenItem.from_dict(g)
-        # --- 检索（主配置；rerank_compare 开启时再跑一次做 A/B） ---
-        ret = _retrieve_with(client, item.question, dataset_ids, ret_cfg,
-                             rerank_override="__default__")
+        row: Dict[str, Any] = {
+            "question_id": item.question_id,
+            "question": item.question,
+            "experiment_id": run_cfg.get("experiment_id"),
+            "test_stage": item.test_stage,
+            "question_type": item.question_type,
+            "paraphrase_group": item.paraphrase_group,
+            "difficulty": item.difficulty,
+            "risk_level": item.risk_level,
+            "answerable": item.answerable,
+            "scenario_id": item.scenario_id,
+            "source_ref": item.source_ref,
+            "needs_chunk_mapping": item.needs_chunk_mapping,
+        }
+        try:
+            ret = _retrieve_with(client, item.question, dataset_ids, ret_cfg,
+                                 rerank_override="__default__")
+        except Exception as exc:  # noqa: BLE001 — 单题检索失败记行，不崩全场
+            row.update({
+                "run_error": f"retrieval: {exc}",
+                "evidence_text": item.evidence_text,
+                "chapter_path": item.chapter_path,
+            })
+            row["failure_attribution"] = None
+            per_q.append(row)
+            if qps > 0:
+                time.sleep(1.0 / qps)
+            continue
         chunks = ret["chunks"]
         r_scores = score_retrieval(item, chunks)
         rerank_cmp = ret_cfg.get("rerank_compare")
@@ -111,27 +136,28 @@ def run(cfg_path: str) -> Dict[str, Any]:
                       f"rerank_compare={rerank_cmp} 两侧，跳过本次 A/B（请令其等于一侧）")
             else:
                 other = rerank_cmp[1] if base_side == rerank_cmp[0] else rerank_cmp[0]
-                ret2 = _retrieve_with(client, item.question, dataset_ids, ret_cfg,
-                                      rerank_override=other)
-                rank_after = first_hit_rank(item, ret2["chunks"])
-                from .metrics_retrieval import rerank_gain as _rg
-                rerank_info = {"hit_rank_base": rank_base, "hit_rank_rerank": rank_after,
-                               "rerank_gain": _rg(rank_base, rank_after),
-                               "rerank_pair": list(rerank_cmp),
-                               "rerank_base_side": base_side}
+                try:
+                    ret2 = _retrieve_with(client, item.question, dataset_ids, ret_cfg,
+                                          rerank_override=other)
+                except Exception as exc:  # noqa: BLE001 — A/B 副侧失败不影响主侧分
+                    rerank_info = {"rerank_error": str(exc),
+                                   "rerank_pair": list(rerank_cmp),
+                                   "rerank_base_side": base_side}
+                else:
+                    rank_after = first_hit_rank(item, ret2["chunks"])
+                    from .metrics_retrieval import rerank_gain as _rg
+                    rerank_info = {"hit_rank_base": rank_base, "hit_rank_rerank": rank_after,
+                                   "rerank_gain": _rg(rank_base, rank_after),
+                                   "rerank_pair": list(rerank_cmp),
+                                   "rerank_base_side": base_side}
         elif rerank_cmp is not None:
             print(f"警告 {item.question_id}：rerank_compare 须为 [关闭值, 开启值] 两元，"
                   f"当前 {rerank_cmp} 已忽略")
-        row: Dict[str, Any] = {
-            "question_id": item.question_id,
-            "question": item.question,
-            "experiment_id": run_cfg.get("experiment_id"),
-            "test_stage": item.test_stage,
+        row.update({
             "question_type": item.question_type,
             "paraphrase_group": item.paraphrase_group,
             "difficulty": item.difficulty,
             "risk_level": item.risk_level,
-            "answerable": item.answerable,
             **{k: v for k, v in r_scores.items()},
             **rerank_info,
             "evidence_recall@5": evidence_recall_at_k(
@@ -142,7 +168,7 @@ def run(cfg_path: str) -> Dict[str, Any]:
             "evidence_snippet": "\n".join(
                 f"[{c.rank}] {c.document_name}#{c.chunk_id}: {c.content[:300]}"
                 for c in chunks[:10]),
-        }
+        })
         # --- 生成（全链路） ---
         if not retrieval_only:
             t0 = time.perf_counter()

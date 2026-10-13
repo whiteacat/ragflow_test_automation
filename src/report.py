@@ -141,24 +141,32 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
             m["RER-Top3"] = {"value": sum(1 for r in rer if r["hit_rank"] <= 3) / len(rer),
                              "n": len(rer),
                              "note": "测试规则口径：正确依据进前3；未召回题不计"}
-        # 场景闭环汇总（同一 scenario_id 跨环节归组；任一环节失败即该场景修复优先）
-        veto_ids = {v["question_id"] for v in m.get("_vetos", [])}
-        scn: dict = {}
-        for r in rows:
-            sid = r.get("scenario_id") or ""
-            if not sid:
-                continue
-            s = scn.setdefault(sid, {"n": 0, "stages": set(), "failed": set()})
-            s["n"] += 1
-            s["stages"].add(str(r.get("test_stage", "?")))
-            if (r.get("question_id") in veto_ids or r.get("failure_attribution")
-                    or r.get("abstention_correct") == 0):
-                s["failed"].add(r["question_id"])
-        if scn:
-            m["_scenarios"] = {
-                sid: {"n": v["n"], "stages": sorted(v["stages"]),
-                      "pass": not v["failed"], "failed": sorted(v["failed"])}
-                for sid, v in sorted(scn.items())}
+
+    # 运行异常单列（单题接口失败已记行，不计入指标分母；两种模式通用）
+    errs = [{"question_id": r["question_id"], "run_error": str(r.get("run_error"))}
+            for r in rows if r.get("run_error")]
+    if errs:
+        m["_errors"] = errs
+    # 场景闭环汇总（同一 scenario_id 跨环节归组；任一环节失败即该场景修复优先）
+    veto_ids = {v["question_id"] for v in m.get("_vetos", [])}
+    err_ids = {e["question_id"] for e in errs}
+    scn: dict = {}
+    for r in rows:
+        sid = r.get("scenario_id") or ""
+        if not sid:
+            continue
+        s = scn.setdefault(sid, {"n": 0, "stages": set(), "failed": set()})
+        s["n"] += 1
+        s["stages"].add(str(r.get("test_stage", "?")))
+        if (r.get("question_id") in veto_ids or r.get("question_id") in err_ids
+                or r.get("failure_attribution")
+                or r.get("abstention_correct") == 0):
+            s["failed"].add(r["question_id"])
+    if scn:
+        m["_scenarios"] = {
+            sid: {"n": v["n"], "stages": sorted(v["stages"]),
+                  "pass": not v["failed"], "failed": sorted(v["failed"])}
+            for sid, v in sorted(scn.items())}
 
     # 阈值判定（只判有值项）
     verdicts = {}
@@ -234,6 +242,12 @@ def render_markdown(rep: Dict[str, Any]) -> str:
         L.append(f"## ⚠️ 一票否决疑似 {rep['veto_count']} 项（须人工确认）")
         for x in rep["metrics"].get("_vetos", []):
             L.append(f"- {x['question_id']}: {x['veto']}")
+    errs = rep["metrics"].get("_errors", [])
+    if errs:
+        L.append("")
+        L.append(f"## ⚠️ 运行异常 {len(errs)} 题（接口失败，未计入指标，重跑前先查服务与配置）")
+        for x in errs:
+            L.append(f"- {x['question_id']}: {x['run_error'][:200]}")
     scns = rep["metrics"].get("_scenarios")
     if scns:
         n_fail = sum(1 for v in scns.values() if not v["pass"])

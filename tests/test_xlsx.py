@@ -181,3 +181,62 @@ def test_pipeline_report_dir_parsing():
     from scripts.run_pipeline import report_dir_from_output
     assert report_dir_from_output("...\n报告目录: results/exp1  待复核") == "results/exp1"
     assert report_dir_from_output("no marker") == ""
+
+
+def test_runner_isolates_retrieval_failure(tmp_path):
+    import yaml
+    import src.runner as runner
+    from src.models import QAOutcome
+
+    class DeadClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def retrieve(self, *a, **k):
+            raise ConnectionError("服务不通")
+
+        def chat(self, *a, **k):
+            return QAOutcome(question_id="", answer="x")
+
+    golden = tmp_path / "g.jsonl"
+    golden.write_text(
+        json.dumps({"question_id": "Q1", "question": "q1",
+                    "answerable": True, "chunk_ids": ["C1"]}) + "\n"
+        + json.dumps({"question_id": "Q2", "question": "q2",
+                      "answerable": True, "chunk_ids": ["C2"]}) + "\n",
+        encoding="utf-8")
+    cfg = {"ragflow": {"base_url": "http://x", "api_key": "k",
+                       "dataset_ids": ["d"], "timeout_s": 5},
+           "retrieval": {"page_size": 5},
+           "run": {"dataset": str(golden), "output_dir": str(tmp_path / "res"),
+                   "experiment_id": "e1", "retrieval_only": True, "qps": 0}}
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    old = runner.RAGFlowClient
+    runner.RAGFlowClient = DeadClient
+    try:
+        rep = runner.run(str(cfg_path))
+    finally:
+        runner.RAGFlowClient = old
+    assert rep["n_questions"] == 2
+    assert len(rep["metrics"]["_errors"]) == 2
+    rows = [json.loads(l) for l in
+            open(tmp_path / "res" / "e1" / "per_question.jsonl", encoding="utf-8")]
+    assert all("服务不通" in r.get("run_error", "") for r in rows)
+    assert rep["metrics"]["RAG-01"]["value"] is None
+
+
+def test_report_error_rows_counted_in_scenarios():
+    rows = [{"question_id": "R1", "test_stage": "retrieval",
+             "scenario_id": "SCN-X", "answerable": True,
+             "run_error": "retrieval: boom"}]
+    rep = build_report(rows, latency_stats([]), True)
+    assert len(rep["metrics"]["_errors"]) == 1
+    assert rep["metrics"]["_scenarios"]["SCN-X"]["failed"] == ["R1"]
+
+
+def test_export_verdict_run_error():
+    from scripts.export_xlsx_record import fail_reason, verdict
+    r = {"question_id": "Q", "run_error": "retrieval: 401"}
+    assert verdict(r, set()) == "待复核"
+    assert fail_reason(r).startswith("运行异常")

@@ -26,6 +26,8 @@ ATTRIB_CN = {"source": "原文问题", "parse": "解析问题", "chunk": "切块
 
 
 def verdict(row: dict, veto_ids: set) -> str:
+    if row.get("run_error"):
+        return "待复核"
     if row.get("question_id") in veto_ids or row.get("forbidden_fact_hit") == 1:
         return "不通过"
     if row.get("abstention_correct") == 0:
@@ -33,6 +35,12 @@ def verdict(row: dict, veto_ids: set) -> str:
     if row.get("failure_attribution") or row.get("needs_chunk_mapping"):
         return "待复核"
     return "通过"
+
+
+def fail_reason(row: dict) -> str:
+    if row.get("run_error"):
+        return f"运行异常：{row['run_error']}"[:300]
+    return ATTRIB_CN.get(str(row.get("failure_attribution") or ""), "")
 
 
 def metrics_str(row: dict) -> str:
@@ -92,7 +100,7 @@ def main() -> None:
                    (f"Top@5={r.get('Top@5')}" if r.get("Top@5") is not None else ""),
                    (r.get("evidence_snippet") or "")[:800],
                    r.get("hit_rank"), metrics_str(r), verdict(r, veto_ids),
-                   ATTRIB_CN.get(str(r.get("failure_attribution") or ""), ""),
+                   fail_reason(r),
                    args.tester, r.get("source_ref", "")])
     out = args.xlsx if args.in_place else (
         args.out or os.path.join(os.path.dirname(os.path.abspath(args.xlsx)),

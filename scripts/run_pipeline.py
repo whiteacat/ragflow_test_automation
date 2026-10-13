@@ -113,12 +113,13 @@ def main() -> int:
                                  "--config", run_cfg)
     if not run_ok:
         ok = False
+        print("第 4 步失败：跳过写回，避免旧数据套新批次号；修好服务/配置后重跑。")
     try:
         os.unlink(run_cfg)
     except OSError:
         pass
 
-    if not args.skip_export and os.path.exists(args.xlsx):
+    if ok and not args.skip_export and os.path.exists(args.xlsx):
         perq, summ = "", ""
         out_dir = report_dir_from_output(run_out)
         if out_dir and os.path.exists(os.path.join(ROOT, out_dir,
