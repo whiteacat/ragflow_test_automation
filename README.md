@@ -56,9 +56,10 @@ cp config/test.yaml.example config/test.yaml
 ```bash
 python scripts/run_pipeline.py --config config/test.yaml \
     --xlsx 企业RAG全环节测试集_600MW.xlsx --batch EXP-001
-# 子集：--stages retrieval rerank qa refusal；跳步：--skip-parse/--skip-mapping/--skip-export
+# 子集：--stages retrieval rerank qa refusal；跳步：--skip-import/--skip-parse/--skip-mapping/--skip-export
+# 映射：--auto-map（--map-threshold 0.8）/ --apply-mapping mapping.jsonl；复核：--judge
 # 换数据集：--golden datasets/golden_sample.jsonl --baseline datasets/parse_golden_sample.jsonl
-# 映射：--apply-mapping mapping.jsonl；解析覆盖：--dataset-id KB --document-id DOC
+# 解析覆盖：--dataset-id KB --document-id DOC
 ```
 
 各步骤也可单独执行：
@@ -126,6 +127,9 @@ python scripts/generation_benchmark.py --config config/test.yaml
 
 ```bash
 # 半自动复核：results/<experiment_id>/review_queue.jsonl + review_prompts.jsonl
+# LLM 自动复核（需 judge.mode=openai_compatible，支持断点续跑/子集/限量）：
+python scripts/judge_review.py --dir results/<experiment_id> --config config/test.yaml
+python scripts/judge_review.py --dir results/<experiment_id> --risk critical high --limit 20
 # 写回 xlsx 执行记录（默认写副本，--in-place 覆盖前请备份）：
 python scripts/export_xlsx_record.py --xlsx 企业RAG全环节测试集_600MW.xlsx \
     --per-question results/<experiment_id>/per_question.jsonl \

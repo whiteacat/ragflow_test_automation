@@ -1,4 +1,4 @@
-"""全环节一键流水线：校验 → 解析 → 映射 → 分环节执行 → 写回。
+"""全环节一键流水线：转换 → 校验 → 解析 → 映射 → 分环节执行 → 复核 → 写回。
 
 问答侧 5 个环节（召回/重排/回答/引用/拒答）本就由 run_all 一次跑完；
 本脚本只是把有依赖关系的旁路串起来，任何一步缺条件就跳过并说明，
@@ -9,8 +9,11 @@
         --xlsx 企业RAG全环节测试集_600MW.xlsx --batch EXP-001
 常用开关：
     --stages retrieval rerank qa refusal   只跑子集（默认全环节）
-    --skip-parse / --skip-mapping / --skip-export   跳过某步
-    --apply-mapping mapping.jsonl          自动应用 Chunk 映射后继续
+    --skip-import / --skip-parse / --skip-mapping / --skip-export  跳过某步
+    --reimport                             强制重转（会丢失已应用的 Chunk 映射）
+    --auto-map [--map-threshold 0.8]       证据对齐自动映射后应用
+    --apply-mapping mapping.jsonl          应用已有映射文件后继续
+    --judge [--judge-tasks GEN-01 GEN-04]  全链路后跑 LLM 复核
     --dataset-id KB --document-id DOC      解析步骤覆盖配置
 """
 from __future__ import annotations
@@ -60,6 +63,12 @@ def main() -> int:
     ap.add_argument("--dataset-id", default="")
     ap.add_argument("--document-id", default="")
     ap.add_argument("--apply-mapping", default="")
+    ap.add_argument("--auto-map", action="store_true")
+    ap.add_argument("--map-threshold", type=float, default=0.8)
+    ap.add_argument("--judge", action="store_true")
+    ap.add_argument("--judge-tasks", nargs="*", default=[])
+    ap.add_argument("--skip-import", action="store_true")
+    ap.add_argument("--reimport", action="store_true")
     ap.add_argument("--skip-parse", action="store_true")
     ap.add_argument("--skip-mapping", action="store_true")
     ap.add_argument("--skip-export", action="store_true")
@@ -68,6 +77,19 @@ def main() -> int:
     golden = args.golden
     baseline = args.baseline
     ok = True
+
+    if not args.skip_import and args.xlsx and os.path.exists(args.xlsx):
+        fresh = (not os.path.exists(golden) or not os.path.exists(baseline)
+                 or os.path.getmtime(args.xlsx) > min(os.path.getmtime(golden),
+                                                      os.path.getmtime(baseline)))
+        if args.reimport or fresh:
+            if not sh("00. 转换xlsx", PY, "scripts/import_xlsx_cases.py",
+                      "--xlsx", args.xlsx, "--out-golden", golden,
+                      "--out-baseline", baseline):
+                return 1
+        else:
+            print("转换产物比 xlsx 新，跳过转换（加 --reimport 强制重转；"
+                  "注意重转会丢失已应用的 Chunk 映射）。")
 
     if not sh("0. 校验问答集", PY, "scripts/validate_dataset.py", golden):
         return 1
@@ -83,9 +105,17 @@ def main() -> int:
         if not sh("1. 解析+切分", *cmd):
             print("提示：解析需 RAGFlow 已入库且配置 document-id，跳过继续。")
     if not args.skip_mapping:
-        if args.apply_mapping:
+        apply_path = args.apply_mapping
+        if args.auto_map:
+            apply_path = apply_path or os.path.join(
+                "/tmp", f"mapping_auto_{args.batch}.jsonl")
+            if not sh("2a. 证据对齐自动映射", PY, "scripts/assist_chunk_mapping.py",
+                      "--auto-map", apply_path, "--golden", golden,
+                      "--config", args.config, "--threshold", str(args.map_threshold)):
+                return 1
+        if apply_path:
             if not sh("2. 应用Chunk映射", PY, "scripts/assist_chunk_mapping.py",
-                      "--apply", args.apply_mapping,
+                      "--apply", apply_path,
                       "--in-golden", golden, "--out-golden", golden):
                 return 1
         else:
@@ -118,6 +148,18 @@ def main() -> int:
         os.unlink(run_cfg)
     except OSError:
         pass
+
+    out_dir = report_dir_from_output(run_out)
+    if args.judge and out_dir and os.path.exists(
+            os.path.join(ROOT, out_dir, "review_prompts.jsonl")):
+        cmd = [PY, "scripts/judge_review.py", "--dir", out_dir,
+               "--config", args.config]
+        if args.judge_tasks:
+            cmd += ["--tasks"] + args.judge_tasks
+        if not sh("4b. LLM 复核", *cmd):
+            print("提示：复核失败不影响已有规则分；修好 judge 配置后可单独重跑本步。")
+    elif args.judge:
+        print("提示：第 4 步无产物，跳过 LLM 复核。")
 
     if ok and not args.skip_export and os.path.exists(args.xlsx):
         perq, summ = "", ""
