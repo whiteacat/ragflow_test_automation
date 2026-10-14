@@ -163,3 +163,50 @@ def test_attribution_eight_classes():
                               "fact_recall_rule": 0.5}) == "generate"
     assert attribute_failure({"answerable": False, "should_refuse": True,
                               "abstention_correct": 0}) == "policy"
+
+
+def test_parse_chunks_null_data():
+    from src.ragflow_client import RAGFlowClient
+    assert RAGFlowClient._parse_chunks({"data": None}, 10) == []
+    assert RAGFlowClient._parse_chunks({"code": 0, "data": {"chunks": []}}, 10) == []
+    cs = RAGFlowClient._parse_chunks(
+        {"data": {"chunks": [{"chunk_id": "C1", "content": "hi"}]}}, 10)
+    assert len(cs) == 1 and cs[0].chunk_id == "C1"
+
+
+def test_retrieve_raises_on_error_code():
+    from src.ragflow_client import RAGFlowClient
+
+    class Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"code": 102, "message": "dataset not found"}
+
+    class Sess:
+        headers = {}
+
+        def update(self, *a, **k):
+            pass
+
+        def post(self, *a, **k):
+            return Resp()
+
+        def get(self, *a, **k):
+            return Resp()
+
+    import requests
+    old = requests.Session
+    requests.Session = Sess
+    try:
+        client = RAGFlowClient("http://x", "k")
+        try:
+            client.retrieve("q", ["d"])
+            raise AssertionError("应抛错")
+        except RuntimeError as e:
+            assert "102" in str(e) and "dataset not found" in str(e)
+    finally:
+        requests.Session = old

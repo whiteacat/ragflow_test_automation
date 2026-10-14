@@ -63,13 +63,20 @@ class RAGFlowClient:
         latency_ms = int((time.perf_counter() - t0) * 1000)
         r.raise_for_status()
         payload = r.json()
+        if isinstance(payload, dict) and payload.get("code") not in (None, 0, "0"):
+            raise RuntimeError(
+                f"RAGFlow retrieval 失败 code={payload.get('code')} "
+                f"message={str(payload.get('message'))[:300]}")
         chunks = self._parse_chunks(payload, page_size)
         return {"chunks": chunks, "latency_ms": latency_ms, "raw": payload}
 
     @staticmethod
     def _parse_chunks(payload: Dict[str, Any], page_size: int) -> List[RetrievedChunk]:
-        data = payload.get("data", payload)
-        raw_list = data.get("chunks") or data.get("chunk_list") or data.get("ret") or []
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            data = payload if isinstance(payload, dict) else {}
+        raw = data.get("chunks") or data.get("chunk_list") or data.get("ret") or []
+        raw_list = raw if isinstance(raw, list) else []
         out: List[RetrievedChunk] = []
         for i, c in enumerate(raw_list[:page_size]):
             if not isinstance(c, dict):

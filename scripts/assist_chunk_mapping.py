@@ -47,7 +47,7 @@ def assist(golden_path: str, cfg_path: str, out: str, topn: int) -> None:
     client = RAGFlowClient(rag["base_url"], rag["api_key"],
                            timeout_s=int(rag.get("timeout_s", 60)))
     ds = list(rag.get("dataset_ids") or [])
-    n = 0
+    n, failed = 0, []
     with open(out, "w", encoding="utf-8") as f:
         for line in open(golden_path, encoding="utf-8"):
             if not line.strip():
@@ -55,7 +55,11 @@ def assist(golden_path: str, cfg_path: str, out: str, topn: int) -> None:
             g = json.loads(line)
             if not g.get("needs_chunk_mapping"):
                 continue
-            ret = _retrieve_top(client, ds, ret_cfg, g["question"])
+            try:
+                ret = _retrieve_top(client, ds, ret_cfg, g["question"])
+            except Exception as exc:  # noqa: BLE001 — 单题失败记下继续
+                failed.append((g["question_id"], str(exc)[:80]))
+                continue
             f.write(json.dumps({
                 "question_id": g["question_id"],
                 "question": g["question"],
@@ -66,7 +70,8 @@ def assist(golden_path: str, cfg_path: str, out: str, topn: int) -> None:
                     "score": round(c.score, 4), "content": c.content[:300]}
                     for c in ret["chunks"][:topn]]}, ensure_ascii=False) + "\n")
             n += 1
-    print(f"待映射 {n} 题，候选清单 → {out}")
+    print(f"待映射 {n} 题，候选清单 → {out}"
+          + (f"；失败 {len(failed)} 题：{failed[:5]}" if failed else ""))
 
 
 def apply(mapping_path: str, in_golden: str, out_golden: str) -> None:
@@ -119,9 +124,16 @@ def auto_map(golden_path: str, cfg_path: str, out: str, threshold: float,
             g = json.loads(line)
             if not g.get("needs_chunk_mapping") or not (g.get("evidence_text") or ""):
                 continue
-            ret = _retrieve_top(client, ds, ret_cfg, g["question"])
+            try:
+                ret = _retrieve_top(client, ds, ret_cfg, g["question"])
+            except Exception as exc:  # noqa: BLE001 — 单题失败记下继续，不崩全场
+                manual.append((g["question_id"], f"检索失败: {exc}"[:80]))
+                continue
             scored = [(evidence_cover(g["evidence_text"], [c.content or ""]) or 0.0, c)
                       for c in ret["chunks"][:topn]]
+            if not scored:
+                manual.append((g["question_id"], "无召回候选"))
+                continue
             scored.sort(key=lambda t: -t[0])
             best, chunk = scored[0] if scored else (0.0, None)
             if chunk is not None and best >= threshold:
