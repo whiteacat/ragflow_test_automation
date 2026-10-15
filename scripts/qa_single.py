@@ -21,6 +21,8 @@ from src.metrics_generation import (  # noqa: E402
     fact_recall,
     forbidden_hit,
     is_abstention,
+    order_correct,
+    unit_complete,
 )
 from src.metrics_retrieval import evidence_recall_at_k  # noqa: E402
 from src.ragflow_client import RAGFlowClient  # noqa: E402
@@ -43,6 +45,10 @@ def main() -> int:
     ap.add_argument("--must-cite", action="store_true")
     ap.add_argument("--topn", type=int, default=5)
     ap.add_argument("--rerank-compare", action="store_true")
+    ap.add_argument("--rerank-id", default="",
+                    help="对比侧重排模型ID（默认与主配置做开/关对比）")
+    ap.add_argument("--requires-order", action="store_true")
+    ap.add_argument("--requires-unit", action="store_true")
     ap.add_argument("--full", action="store_true",
                     help="同时跑问答（需 chat_id），默认只跑检索")
     args = ap.parse_args()
@@ -57,17 +63,21 @@ def main() -> int:
               similarity_threshold=float(ret_cfg.get("similarity_threshold", 0.2)),
               vector_similarity_weight=float(
                   ret_cfg.get("vector_similarity_weight", 0.3)),
-              keyword=bool(ret_cfg.get("keyword", False)))
+              keyword=bool(ret_cfg.get("keyword", False)),
+              highlight=bool(ret_cfg.get("highlight", False)),
+              rerank_id=ret_cfg.get("rerank_id"))
+    if "document_ids" in ret_cfg and ret_cfg["document_ids"]:
+        kw["document_ids"] = list(ret_cfg["document_ids"])
     ret = client.retrieve(args.question, ds, **kw)
     show_chunks(f"检索（rerank={ret_cfg.get('rerank_id')})", ret["chunks"], args.topn)
 
     if args.rerank_compare:
-        rid = ret_cfg.get("rerank_id")
-        other = None if rid else "NEED_RERANK_ID"
-        if other == "NEED_RERANK_ID":
-            print("\n提示：主配置未开 rerank，无法对比；请先配 retrieval.rerank_id")
+        probe = args.rerank_id or ret_cfg.get("rerank_id")
+        if not probe:
+            print("\n提示：主配置与 --rerank-id 均未给重排模型，无法对比")
         else:
-            ret2 = client.retrieve(args.question, ds, rerank_id=other, **kw)
+            other = None if probe == ret_cfg.get("rerank_id") else probe
+            ret2 = client.retrieve(args.question, ds, **{**kw, "rerank_id": other})
             show_chunks(f"重排对比（rerank={other})", ret2["chunks"], args.topn)
 
     if args.evidence:
@@ -93,6 +103,10 @@ def main() -> int:
           f"(1=触发失败)")
     print(f"引用完整: {citation_complete(args.must_cite, qa.answer or '')}")
     print(f"是否拒答: {is_abstention(qa.answer or '')}")
+    if args.requires_order:
+        print(f"顺序正确: {order_correct(args.expect, qa.answer or '')}")
+    if args.requires_unit:
+        print(f"单位完整: {unit_complete(args.expect, qa.answer or '')}")
     return 0
 
 
