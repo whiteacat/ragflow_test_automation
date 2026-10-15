@@ -19,12 +19,15 @@ ABSTAIN_PATTERNS = [
 CITATION_PATTERNS = [
     r"【[^】]{1,80}】", r"\[[^\]]{1,60}(pdf|docx|doc|条款|第.{1,10}条|页)\]",
     r"来源[：:]", r"引用[：:]", r"chunk[_-]?[a-z0-9]+", r"doc[_-]?[a-z0-9]+",
+    r"\[ID[:：\s]*\d+\]",  # RAGFlow 默认引用标记 [ID:0]
 ]
 
 
 def normalize_text(s: str) -> str:
     s = unicodedata.normalize("NFKC", s or "")
+    s = re.sub(r"[*_`#]", "", s)  # 去 Markdown 加粗/代码/标题符号，防 **23.55MPa** 误判
     s = re.sub(r"\s+", "", s)
+    s = re.sub(r"[的是为]", "", s)  # 去中文系词助词，双侧同去防“压力为23.55”误判
     return s.lower()
 
 

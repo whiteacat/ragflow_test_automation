@@ -210,3 +210,13 @@ def test_retrieve_raises_on_error_code():
             assert "102" in str(e) and "dataset not found" in str(e)
     finally:
         requests.Session = old
+
+
+def test_citation_ragflow_id_marker():
+    assert citation_complete(True, "压力为23.55MPa [ID:0]。") == 1
+    assert citation_complete(True, "压力为23.55MPa。") == 0
+
+
+def test_normalize_ignores_markdown_and_copula():
+    assert fact_recall(["超压试验压力23.55MPa"],
+                       "超压试验压力为**23.55MPa**。") == 1.0
