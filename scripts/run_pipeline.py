@@ -176,11 +176,19 @@ def main() -> int:
                 print(f"提示：未定位本次产物目录，回退到最新 {outs[-1]}")
                 perq = outs[-1]
                 summ = os.path.join(os.path.dirname(perq), "summary.json")
+            else:
+                print("跳过写回：找不到任何 per_question.jsonl（第 4 步无产物）。")
         if perq:
             sh("5. 写回执行记录", PY, "scripts/export_xlsx_record.py",
                "--xlsx", args.xlsx, "--per-question", perq,
                "--summary", summ, "--batch", args.batch,
                "--tester", args.tester)
+    elif not ok:
+        print("跳过写回：第 4 步失败（见上），无本次产物可写。")
+    elif args.skip_export:
+        print("跳过写回：指定了 --skip-export。")
+    elif not os.path.exists(args.xlsx):
+        print(f"跳过写回：找不到 {args.xlsx}。")
     print("\n流水线结束：" + ("全部成功" if ok else "执行有失败，见上"))
     return 0 if ok else 1
 
