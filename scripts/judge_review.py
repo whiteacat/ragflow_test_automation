@@ -67,12 +67,13 @@ def select(queue, perq, tasks, risks):
     return out
 
 
-def call_with_retry(base_url, api_key, model, prompt, timeout_s, retries):
+def call_with_retry(base_url, api_key, model, prompt, timeout_s, retries,
+                    response_format=""):
     last = None
     for i in range(retries + 1):
         try:
             return call_openai_compatible(base_url, api_key, model, prompt,
-                                          timeout_s)
+                                          timeout_s, response_format)
         except Exception as exc:  # noqa: BLE001 — 重试后仍失败则记 error
             last = str(exc)
             time.sleep(min(2 ** i, 30))
@@ -103,6 +104,7 @@ def main() -> int:
         print("需配置 judge.base_url 与 judge.model")
         return 2
     api_key = cfg.get("api_key") or os.environ.get("JUDGE_API_KEY", "none")
+    response_format = str(cfg.get("response_format") or "")
 
     prompts, queue, perq = load_inputs(args.dir)
     items = select(queue, perq, set(args.tasks), set(args.risk))
@@ -128,7 +130,8 @@ def main() -> int:
         for q in todo:
             key = (q.get("question_id"), q.get("judge_task"))
             res = call_with_retry(base_url, api_key, model,
-                                  prompts.get(key, ""), args.timeout, args.retries)
+                                  prompts.get(key, ""), args.timeout, args.retries,
+                                  response_format)
             rec = {"question_id": q.get("question_id"),
                    "judge_task": q.get("judge_task"),
                    "model": model, **res}

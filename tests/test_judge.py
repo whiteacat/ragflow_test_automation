@@ -61,3 +61,40 @@ def test_call_with_retry_gives_up(monkeypatch):
     res = jr.call_with_retry("http://x", "k", "mdl", "p", 1, 2)
     assert res["score"] is None and "down" in res["error"]
     assert len(calls) == 3
+
+
+def test_parse_judge_json_variants():
+    from src.judge import parse_judge_json
+    assert parse_judge_json('{"score": 2, "reason": "ok"}')["score"] == 2
+    fenced = '分析如下：\n```json\n{"score": 1, "reason": "缺条件"}\n```'
+    assert parse_judge_json(fenced)["score"] == 1
+    prose = '我认为 score: 0，因为无依据。'
+    assert parse_judge_json(prose)["score"] == 0
+    assert parse_judge_json('完全无法判断')['score'] is None
+
+
+def test_call_response_format_passthrough(monkeypatch):
+    import scripts.judge_review as m
+    bodies = []
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"score": 2}'}}]}
+
+    class Post:
+        def post(self, url, headers=None, json=None, timeout=None):
+            bodies.append(json)
+            return Resp()
+
+    import sys as _sys
+    _sys.modules.setdefault("requests", Post())
+    monkeypatch.setattr("requests.post", Post().post, raising=False)
+    import src.judge as j
+    out = j.call_openai_compatible("http://x", "k", "mdl", "p", 5, "json_object")
+    assert out["score"] == 2
+    assert bodies[0]["response_format"] == {"type": "json_object"}
+    out2 = j.call_openai_compatible("http://x", "k", "mdl", "p", 5)
+    assert "response_format" not in bodies[1]

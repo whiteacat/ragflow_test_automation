@@ -48,3 +48,4 @@ judge:
   base_url: null
   api_key: null
   model: null
+  # response_format: "json_object"  # Ollama/vLLM 强制 JSON 输出（Qwen3 思考模型建议开）

@@ -34,7 +34,8 @@ PROMPT_TEMPLATE = """你是 RAG 问答质量评审员。只依据【证据】和
 【禁止事项】{forbidden}
 【检索证据】{evidence}
 
-评审任务：{task_desc}
+ 评审任务：{task_desc}
+仅输出一行 JSON，不要输出任何解释、前言或代码块标记。
 输出 JSON：{{"score": <按任务标度打分>, "reason": "<20字内理由>", "evidence_idx": [<支撑证据编号>]}}"""
 
 
@@ -77,17 +78,34 @@ def build_review_queue(items: List[Dict[str, Any]],
 
 
 def call_openai_compatible(base_url: str, api_key: str, model: str,
-                           prompt: str, timeout_s: int = 120) -> Dict[str, Any]:
+                           prompt: str, timeout_s: int = 120,
+                           response_format: str = "") -> Dict[str, Any]:
     import requests  # 延迟导入：off 模式下无依赖
+    body = {"model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0}
+    if response_format:  # 如 "json_object"（Ollama/vLLM 支持，强制 JSON 输出）
+        body["response_format"] = {"type": response_format}
     r = requests.post(f"{base_url.rstrip('/')}/chat/completions",
                       headers={"Authorization": f"Bearer {api_key}"},
-                      json={"model": model,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": 0.0}, timeout=timeout_s)
+                      json=body, timeout=timeout_s)
     r.raise_for_status()
     content = r.json()["choices"][0]["message"]["content"]
+    return parse_judge_json(content)
+
+
+def parse_judge_json(content: str) -> Dict[str, Any]:
+    """从模型输出中提取打分 JSON：去代码围栏后取首尾花括号段，
+    失败则正则兜底抓 score，仍无则返回无分（带原文备查）。"""
+    import re
+    text = re.sub(r"```(?:json)?", "", content or "").strip()
     try:
-        start, end = content.index("{"), content.rindex("}") + 1
-        return json.loads(content[start:end])
+        start, end = text.index("{"), text.rindex("}") + 1
+        return json.loads(text[start:end])
     except ValueError:
-        return {"score": None, "reason": content[:200], "raw": content[:1000]}
+        pass
+    m = re.search(r'"?score"?\s*[:=]\s*(\d+(?:\.\d+)?)', text)
+    if m:
+        return {"score": float(m.group(1)), "reason": text[:200],
+                "partial": True}
+    return {"score": None, "reason": text[:200], "raw": text[:1000]}
