@@ -127,3 +127,22 @@ def test_queue_carries_refusal_context():
              "refusal_reason": "ambiguous"}]
     q = build_review_queue(rows, tasks=["GEN-01"])
     assert "应拒答" in q[0]["prompt"]
+
+
+def test_ragas_like_metrics():
+    from scripts import ragas_like as rl
+    chunks = [{"rank": 1, "doc": "D", "chunk_id": "C1", "content": "超压试验23.55MPa"},
+              {"rank": 2, "doc": "D", "chunk_id": "CX", "content": "无关内容"}]
+    clauses = ["超压试验23.55mpa"]
+    assert rl.context_precision(chunks, clauses, set(), 5) == 1.0
+    assert rl.context_recall(chunks, clauses) == 1.0
+    assert rl.faithfulness("超压试验23.55MPa。", chunks) == 1.0
+    rel = rl.answer_relevancy("水冷壁超压试验压力是多少？", "超压试验压力23.55MPa。")
+    assert 0.0 < rel < 1.0  # 部分覆盖：规则版取二元组召回
+    assert rl.context_precision(chunks, [], set(), 5) is None
+    assert rl.answer_relevancy("?", "答") is None
+    row = {"question_id": "Q", "evidence_snippet": "[1] D#C1: 超压试验23.55MPa",
+           "predicted_answer": "超压试验23.55MPa。", "question": "压力是多少？"}
+    s = rl.score_row(row, {"evidence_text": "超压试验23.55MPa",
+                           "chunk_ids": ["C1"]}, 5)
+    assert s["context_precision"] == 1.0 and s["faithfulness"] == 1.0
