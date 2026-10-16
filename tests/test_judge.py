@@ -98,3 +98,32 @@ def test_call_response_format_passthrough(monkeypatch):
     assert bodies[0]["response_format"] == {"type": "json_object"}
     out2 = j.call_openai_compatible("http://x", "k", "mdl", "p", 5)
     assert "response_format" not in bodies[1]
+
+
+def test_refusal_iron_rule_in_prompt():
+    from src.judge import build_prompt
+    p = build_prompt("油压低了怎么办？", "润滑油压0.06时停机。", "", [], [],
+                     "证据", "GEN-01", True, "ambiguous")
+    assert "应拒答" in p and "一律 0 分" in p
+    p2 = build_prompt("压力多少？", "23.55MPa。", "23.55MPa。", ["23.55MPa"],
+                      [], "证据", "GEN-01")
+    assert "应正常回答" in p2 and "一律 0 分" not in p2
+
+
+def test_task_scales_and_directions():
+    from src.judge import JUDGE_TASKS, SCORE_DIRECTIONS
+    assert "只取0/1/2" in JUDGE_TASKS["GEN-01"]
+    assert "只取0/1" in JUDGE_TASKS["GEN-04"]
+    assert SCORE_DIRECTIONS["GEN-04"] == "lower"
+    assert SCORE_DIRECTIONS["GEN-01"] == "higher"
+
+
+def test_queue_carries_refusal_context():
+    from src.judge import build_review_queue
+    rows = [{"question_id": "R1", "question_type": "negative",
+             "question": "q", "predicted_answer": "a", "golden_answer": "",
+             "expected_answer_points": [], "forbidden_claims": [],
+             "evidence_snippet": "", "answerable": False,
+             "refusal_reason": "ambiguous"}]
+    q = build_review_queue(rows, tasks=["GEN-01"])
+    assert "应拒答" in q[0]["prompt"]

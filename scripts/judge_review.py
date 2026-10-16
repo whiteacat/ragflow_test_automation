@@ -125,6 +125,8 @@ def main() -> int:
         return 0
 
     out_path = os.path.join(args.dir, "review_scores.jsonl")
+    if args.no_resume and os.path.exists(out_path):
+        os.remove(out_path)  # 全量重打：旧分量表已失效，清掉防重复
     scored = 0
     with open(out_path, "a", encoding="utf-8") as f:
         for q in todo:
