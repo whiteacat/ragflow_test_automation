@@ -15,11 +15,10 @@
 | `difficulty` | 是 | enum | `easy/medium/hard` |
 | `risk_level` | 是 | enum | `low/medium/high/critical`；高/关键题须填 `mandatory_points` |
 | `answerable` | 是 | bool | 是否可答；与 `should_refuse` 恒互反，写其一即可 |
-| `expected_answer_points` | 可答题是 | string[] | 标准答案要点：必须表达的事实、条件、结论（GEN-02 口径） |
+| `expected_answer_points` | 可答题是 | string[] | 标准答案要点：必须表达的事实、条件、结论（GEN-02 口径）。**写法要原子化**：一条一个事实（数值/对象/动作），整句参考答案放 `golden_answer`——规则版只认包含匹配，整句会被改写细节卡死 |
 | `mandatory_points` | 高风险题是 | string[] | 不可遗漏项：缺失会改变操作或安全含义（§3-5 逐条复核） |
 | `forbidden_claims` | 建议 | string[] | 禁止内容：无依据/对象错/版本错的结论（GEN-09 一票否决） |
-| `evidence_text` | 可答题是 | string | 原文证据（§8.2-1 每题须有明确证据） |
-| `chapter_path` | 可答题是 | string | 章节路径，如 `1 机组启动 > 1.1 检修后的验收与试验`（§11 章节覆盖） |
+| `evidence_text` | 可答题是 | string | 原文证据（§8.2-1 每题须有明确证据） || `chapter_path` | 可答题是 | string | 章节路径，如 `1 机组启动 > 1.1 检修后的验收与试验`（§11 章节覆盖） |
 | `table_or_item` | 表格题是 | string | 表格名/行列/条款编号，如 `水压试验表/省煤器行/超压试验压力列`（§8.2-6） |
 | `expected_document/chunk` | 检索题是 | string | 入库后映射的目标文档/Chunk；与 `document_ids/chunk_ids` 自动合并 |
 | `document_ids/chunk_ids` | 可答题是 | string[] | 预期命中集合；`acceptable_chunks` 中任一命中亦算命中 |

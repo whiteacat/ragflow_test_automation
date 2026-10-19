@@ -112,7 +112,7 @@ def latency_stats(e2e_ms: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
-UNIT_PATTERN = re.compile(r"(MPa|kPa|Pa|kV|V|A|mA|℃|°C|N·m|Nm|r/min|mm|m\b|t/h|MW|kW|%)")
+UNIT_PATTERN = re.compile(r"(MPa|kPa|Pa|kV|V|A|mA|℃|°C|N·m|Nm|r/min|mm|t/h|MW|kW|%)")
 
 
 def order_correct(required_facts: List[str], answer: str) -> Optional[int]:
