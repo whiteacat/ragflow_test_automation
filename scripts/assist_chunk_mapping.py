@@ -47,7 +47,10 @@ def assist(golden_path: str, cfg_path: str, out: str, topn: int) -> None:
     client = RAGFlowClient(rag["base_url"], rag["api_key"],
                            timeout_s=int(rag.get("timeout_s", 60)))
     ds = list(rag.get("dataset_ids") or [])
-    n, failed = 0, []
+    total = sum(1 for line in open(golden_path, encoding="utf-8")
+                if line.strip() and json.loads(line).get("needs_chunk_mapping"))
+    n, failed = [], []
+    done_i = 0
     with open(out, "w", encoding="utf-8") as f:
         for line in open(golden_path, encoding="utf-8"):
             if not line.strip():
@@ -55,10 +58,13 @@ def assist(golden_path: str, cfg_path: str, out: str, topn: int) -> None:
             g = json.loads(line)
             if not g.get("needs_chunk_mapping"):
                 continue
+            done_i += 1
+            print(f"[{done_i}/{total}] {g['question_id']} 检索中…", flush=True)
             try:
                 ret = _retrieve_top(client, ds, ret_cfg, g["question"])
             except Exception as exc:  # noqa: BLE001 — 单题失败记下继续
                 failed.append((g["question_id"], str(exc)[:80]))
+                print(f"  ✗ 失败: {str(exc)[:60]}", flush=True)
                 continue
             f.write(json.dumps({
                 "question_id": g["question_id"],
@@ -69,7 +75,9 @@ def assist(golden_path: str, cfg_path: str, out: str, topn: int) -> None:
                     "document_id": c.document_id, "document_name": c.document_name,
                     "score": round(c.score, 4), "content": c.content[:300]}
                     for c in ret["chunks"][:topn]]}, ensure_ascii=False) + "\n")
+            f.flush()  # 每题落盘，中断也不丢已完成的
             n += 1
+            print(f"  ✓ {len(ret['chunks'])} 个候选", flush=True)
     print(f"待映射 {n} 题，候选清单 → {out}"
           + (f"；失败 {len(failed)} 题：{failed[:5]}" if failed else ""))
 
@@ -117,6 +125,9 @@ def auto_map(golden_path: str, cfg_path: str, out: str, threshold: float,
                            timeout_s=int(rag.get("timeout_s", 60)))
     ds = list(rag.get("dataset_ids") or [])
     auto, manual = 0, []
+    total = sum(1 for line in open(golden_path, encoding="utf-8")
+                if line.strip() and json.loads(line).get("needs_chunk_mapping"))
+    done_i = 0
     with open(out, "w", encoding="utf-8") as f:
         for line in open(golden_path, encoding="utf-8"):
             if not line.strip():
@@ -124,27 +135,34 @@ def auto_map(golden_path: str, cfg_path: str, out: str, threshold: float,
             g = json.loads(line)
             if not g.get("needs_chunk_mapping") or not (g.get("evidence_text") or ""):
                 continue
+            done_i += 1
+            print(f"[{done_i}/{total}] {g['question_id']} 检索中…", flush=True)
             try:
                 ret = _retrieve_top(client, ds, ret_cfg, g["question"])
             except Exception as exc:  # noqa: BLE001 — 单题失败记下继续，不崩全场
                 manual.append((g["question_id"], f"检索失败: {exc}"[:80]))
+                print(f"  ✗ 检索失败: {str(exc)[:60]}", flush=True)
                 continue
             scored = [(evidence_cover(g["evidence_text"], [c.content or ""]) or 0.0, c)
                       for c in ret["chunks"][:topn]]
             if not scored:
                 manual.append((g["question_id"], "无召回候选"))
+                print("  ✗ 无召回候选", flush=True)
                 continue
             scored.sort(key=lambda t: -t[0])
-            best, chunk = scored[0] if scored else (0.0, None)
+            best, chunk = scored[0]
             if chunk is not None and best >= threshold:
                 f.write(json.dumps({
                     "question_id": g["question_id"],
                     "expected_chunk": chunk.chunk_id,
                     "expected_document": chunk.document_id,
                     "auto_coverage": round(best, 3)}, ensure_ascii=False) + "\n")
+                f.flush()
                 auto += 1
+                print(f"  ✓ 覆盖 {best:.0%} → {chunk.chunk_id}（自动转正）", flush=True)
             else:
                 manual.append((g["question_id"], round(best, 3)))
+                print(f"  ✓ 覆盖 {best:.0%}（低于阈值，转人工）", flush=True)
     print(f"自动映射 {auto} 题 → {out}；低于阈值转人工 {len(manual)} 题：{manual[:10]}")
 
 
