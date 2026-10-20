@@ -37,11 +37,31 @@ cp config/test.yaml.example config/test.yaml
 | `run.dataset` | 本次运行的问答数据集（二选一：`datasets/golden_sample.jsonl` 手写样例，或 `datasets/xlsx_golden.jsonl` xlsx 转换集） |
 | `run.stages` | 环节子集过滤，`null` 跑全环节；如 `["retrieval", "rerank"]` 只跑召回/重排 |
 | `run.retrieval_only` | `true` 只跑检索（RAG 指标，无需 `chat_id`）；`false` 跑全链路 |
-| `retrieval.rerank_compare` | `§6.2` 重排 A/B，如 `[null, "rerank-model-id"]` 对同一批题跑两次对比 |
+| `retrieval.rerank_id` | 重排模型 id，必须用 RAGFlow 的**全限定引用** `模型名@实例名@provider名`（如 `Qwen3-Reranker-8B@default@VLLM`）；没配就 `null` |
+| `retrieval.rerank_compare` | `§6.2` 重排 A/B，如 `[null, "Qwen3-Reranker-8B@default@VLLM"]`，必须有一侧等于 `rerank_id` |
 | `judge.response_format` | 填 `json_object` 强制模型输出 JSON（Ollama/vLLM，思考模型如 Qwen3 强烈建议开） |
 | `judge.timeout / qps` | 复核单条超时（默认 120s）与限速（默认 1 qps），27B 等慢模型可调 |
 | `parse.baseline/document_id` | 解析比对的基线文件与 RAGFlow 侧文档 |
 | `tier.active` | 测试集分层：`core` 核心金标准 / `extended` 扩展回归 / `adversarial` 对抗 |
+
+### 本地 rerank（vLLM）配置要点
+
+`retrieval.rerank_id` 会原样透传给 RAGFlow 的 `/api/v1/retrieval`，**格式必须与 RAGFlow 注册的一致**：
+
+1. **全限定引用**：`模型名@实例名@provider名`。实例名一般 `default`，provider 是注册时选的厂商（`VLLM` / `OpenAI-API-Compatible` / `Xinference` 等）。
+   例：`"Qwen3-Reranker-8B@default@VLLM"`。
+2. **只写裸模型名会报错**：`Provider  not found for model <名字>`（provider 段为空）——这不是没注册，是少了 `@实例@provider`。
+3. 老版本（Python 后端）用的是 `___VLLM` 后缀，新版不适用；以 UI「Model providers」或数据库里查到的为准：
+   ```sql
+   SELECT m.model_name, i.instance_name, p.provider_name
+   FROM tenant_model m
+   JOIN tenant_model_instance i ON i.id = m.instance_id
+   JOIN tenant_model_provider p ON p.id = m.provider_id
+   WHERE m.model_type LIKE '%rerank%';
+   ```
+4. **vLLM 侧**：Qwen3-Reranker 必须以 pooling + rerank overrides 启动（`--runner pooling --hf_overrides '{"architectures":["Qwen3ForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'`），不能加 `--is-embedding`，否则 `/v1/rerank` 算不出分数。
+5. RAGFlow 跑在 Docker、vLLM 在宿主机时，provider 的 Base URL 用 `host.docker.internal:<端口>`（Linux 用宿主机局域网 IP），不能用 `127.0.0.1`。
+6. 验证顺序：curl 直连 `/api/v1/retrieval` 带 `rerank_id` → `qa_single.py --rerank-compare` 看排序是否变化 → `retrieval_benchmark.py` 看 `rerank_gain` / RER-Top3。
 
 ## 测试数据：两种输入
 

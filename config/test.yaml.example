@@ -13,9 +13,15 @@ retrieval:
   vector_similarity_weight: 0.3
   keyword: false
   highlight: false
-  rerank_id: null      # 如有 rerank 模型可填，否则 null
+  # 重排模型 id：必须是 RAGFlow 里注册的“全限定引用” 模型名@实例名@provider名
+  # 例：Qwen3-Reranker-8B@default@VLLM（vLLM 本地部署，实例名通常是 default）
+  # 只写裸模型名会报 Provider  not found for model <名字>（provider 段为空）
+  # 老版本（Python 后端）用 ___VLLM 后缀，不适用于新版；以 UI/DB 里查到的为准
+  # 查法：Model providers 页，或 SELECT model_name/instance_name/provider_name 拼接
+  rerank_id: null      # 没配 rerank 就留 null
   # §6.2 重排 A/B：填 [关闭值, 开启值] 即对同一批问题跑两次、同一候选集对比排序变化
-  # 例：rerank_compare: [null, "rerank-model-id"]；留空/null 则不跑对比
+  # 必须有一侧等于上面的 rerank_id，否则会被跳过。例：
+  # rerank_compare: [null, "Qwen3-Reranker-8B@default@VLLM"]
   rerank_compare: null
 
 parse:
