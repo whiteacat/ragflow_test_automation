@@ -70,6 +70,15 @@ cp config/test.yaml.example config/test.yaml
   先标注 10~20 道人工确认的黄金题，验证通过后按 §11 配额先扩到 120 条核心集，再到 300~500。
 - **xlsx 全环节集**：`企业RAG全环节测试集_600MW.xlsx`（测试用例总表，120 条，30 场景）
   为业务基准源，运行时不直读，需先转换（见流程步骤 0）。xlsx 本体为受控文件，不入库 git。
+- **小规模冒烟集**：`datasets/smoke_small.jsonl`（8 条：6 条问答 + 2 条拒答，均无需 Chunk 映射），
+  用于改完配置/模型后 1~2 分钟验证全链路是否通。检索的 chunk 级指标（hit@k/MRR/NDCG）不计分母，
+  仍可看 evidence_recall、rerank_gain、生成规则分与拒答判定。
+
+```bash
+python scripts/run_pipeline.py --config config/test.yaml \
+    --golden datasets/smoke_small.jsonl \
+    --skip-import --skip-parse --skip-mapping --skip-export --batch SMOKE-8
+```
 
 ## 完整测试流程
 
