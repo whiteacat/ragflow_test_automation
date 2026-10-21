@@ -123,6 +123,24 @@ python scripts/parse_benchmark.py --baseline datasets/xlsx_parse_baseline.jsonl 
 
 ### 步骤 3：入库映射 Chunk（xlsx 转换集必需，手写集已内置）
 
+**推荐：xlsx 人工勾选**（拿到真实检索结果后人工判定，最可靠）
+
+```bash
+# 1) 对未映射的题跑检索，导出候选清单 xlsx（一行一个候选；可传多个数据集）
+python scripts/export_chunk_candidates_xlsx.py --config config/test.yaml \
+    --golden datasets/xlsx_golden.jsonl datasets/smoke_small.jsonl \
+    --out chunk_review.xlsx --topn 10
+# 2) 在 Excel 的「候选清单」页，「选中(填1)」列给正确 chunk 填 1（多个共同作答就多填）
+# 3) 回收勾选 → mapping.jsonl，并直接写回 golden
+python scripts/export_chunk_candidates_xlsx.py --apply-xlsx chunk_review.xlsx \
+    --mapping-out mapping.jsonl \
+    --in-golden datasets/xlsx_golden.jsonl --out-golden datasets/xlsx_golden.jsonl
+```
+
+`--all` 连已有映射的题一起导出（复核已有标注用）。同一问题文本只请求一次检索，结果复用。
+
+**备选：JSONL 候选 + 自动映射**
+
 ```bash
 # 1) 对 needs_chunk_mapping=true 的用例跑检索，输出候选清单
 python scripts/assist_chunk_mapping.py --golden datasets/xlsx_golden.jsonl \
@@ -131,6 +149,8 @@ python scripts/assist_chunk_mapping.py --golden datasets/xlsx_golden.jsonl \
 python scripts/assist_chunk_mapping.py --apply mapping.jsonl \
     --in-golden datasets/xlsx_golden.jsonl --out-golden datasets/xlsx_golden.jsonl
 ```
+
+`--auto-map` 的覆盖率是拿「同一批检索结果」自证，只能当粗筛，正式金标准请人工勾选。
 
 ### 步骤 4：健康检查与冒烟
 
