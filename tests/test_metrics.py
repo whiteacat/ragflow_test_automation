@@ -1,4 +1,5 @@
 """全自动指标单元测试（无需 RAGFlow 服务，纯本地验证）。"""
+import math
 import os
 import sys
 
@@ -56,6 +57,36 @@ def test_no_golden_excluded():
 def test_ndcg_perfect():
     g = GoldenItem(question_id="T", question="q", chunk_ids=["C1", "C2"])
     assert abs(ndcg_at_10(g, mk(["C1", "C2"])) - 1.0) < 1e-9
+
+
+def test_ndcg_doc_gold_not_above_one():
+    """文档级 gold：同文档多个 chunk 只计一次，NDCG 不得 >1。"""
+    g = GoldenItem(question_id="T", question="q", expected_document="D1")
+    cs = mk(["C1", "C2", "C3", "C4", "C5"])
+    v = ndcg_at_10(g, cs)
+    assert v is not None and 0.0 < v <= 1.0
+    assert abs(v - 1.0) < 1e-9  # 该文档首个 chunk 排第 1 → 满分
+
+
+def test_ndcg_doc_gold_ranked_lower():
+    """文档级 gold 排在第 3 位：1/log2(4)，不超过 1。"""
+    g = GoldenItem(question_id="T", question="q", expected_document="D1")
+    cs = [RetrievedChunk(chunk_id=f"C{i}", document_id="DX" if i < 2 else "D1",
+                         rank=i + 1) for i in range(5)]
+    v = ndcg_at_10(g, cs)
+    assert v is not None and v <= 1.0
+    assert abs(v - (1 / math.log2(4))) < 1e-9
+
+
+def test_ndcg_chunk_gold_ignores_document_gold():
+    """有 chunk 级 gold 时：完美命中得 1.0，同文档其它 chunk 不蹭分。"""
+    g = GoldenItem(question_id="T", question="q",
+                   expected_chunk="C1", expected_document="D1")
+    perfect = [RetrievedChunk(chunk_id="C1", document_id="D1", rank=1)]
+    other = [RetrievedChunk(chunk_id="C9", document_id="D1", rank=1)]
+    assert abs(ndcg_at_10(g, perfect) - 1.0) < 1e-9
+    assert hit_at_k(g, perfect, 5) == 1
+    assert hit_at_k(g, other, 5) == 0
 
 
 def test_fact_recall():

@@ -18,7 +18,7 @@ def _norm(s: str) -> str:
 
 def _gold_sets(golden: GoldenItem):
     if (golden.needs_chunk_mapping and not golden.chunk_ids
-            and not golden.acceptable_chunks):
+            and not golden.acceptable_chunks and not golden.expected_chunk):
         return set(), set()
     chunks = {_norm(c) for c in golden.chunk_ids if c}
     if golden.expected_chunk:
@@ -27,6 +27,10 @@ def _gold_sets(golden: GoldenItem):
     docs = {_norm(d) for d in golden.document_ids if d}
     if golden.expected_document:
         docs.add(_norm(golden.expected_document))
+    if chunks:
+        # 已有 chunk 级标注时，文档级不再作为独立相关项：否则同一证据被算两次，
+        # IDCG 分母虚高（完美命中 NDCG 仅 ~0.6），且同文档其它 chunk 也能蹭分。
+        docs = set()
     return chunks, docs
 
 
@@ -78,18 +82,25 @@ def ndcg_at_10(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional[flo
         for d in gold_docs:
             rel.setdefault(d, 1)
 
-    def gain(c: RetrievedChunk) -> int:
-        g = rel.get(_norm(c.chunk_id), 0)
-        if g == 0 and _norm(c.document_id) in rel:
-            g = rel[_norm(c.document_id)]
-        if g == 0 and _norm(c.document_name) in rel:
-            g = rel[_norm(c.document_name)]
-        return g
+    def gain(c: RetrievedChunk) -> tuple[int, str]:
+        """返回 (增益, 命中的 gold 键)。键用于去重：同一 gold 项只计一次。"""
+        k = _norm(c.chunk_id)
+        if k and rel.get(k, 0) > 0:
+            return rel[k], k
+        k = _norm(c.document_id)
+        if k and rel.get(k, 0) > 0:
+            return rel[k], k
+        k = _norm(c.document_name)
+        if k and rel.get(k, 0) > 0:
+            return rel[k], k
+        return 0, ""
 
     dcg = 0.0
+    credited: set[str] = set()
     for c in chunks[:10]:
-        g = gain(c)
-        if g > 0:
+        g, key = gain(c)
+        if g > 0 and key not in credited:
+            credited.add(key)
             dcg += (2 ** g - 1) / math.log2(c.rank + 1)
     ideal = sorted(rel.values(), reverse=True)[:10]
     idcg = sum((2 ** g - 1) / math.log2(i + 2) for i, g in enumerate(ideal) if g > 0)
