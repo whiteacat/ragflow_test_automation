@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections import Counter
 
@@ -25,6 +26,20 @@ UNIT_TYPES = {"parameter", "table", "range"}
 DEPRECATED_KEYS = {"golden_facts", "optional_facts", "required_facts",
                    "forbidden_facts", "must_answer", "must_abstain",
                    "requires_attachment", "allowed_paraphrase"}
+
+
+def lint_answer_points(points, qid: str, warns: list) -> None:
+    """事实点可匹配性告警：多值点、无数字长句、只有数值缺标签。"""
+    multi = [p for p in points if len(re.findall(r"\d+(?:\.\d+)?", p or "")) >= 2]
+    prose = [p for p in points if not re.search(r"\d", p or "") and len(p or "") > 30]
+    bare = [p for p in points
+            if re.search(r"\d", p or "") and not re.search(r"[\u4e00-\u9fff]", p or "")]
+    if multi:
+        warns.append(f"{qid}: {len(multi)} 个事实点含多个数值，建议一点一值，如 {multi[0]!r}")
+    if prose:
+        warns.append(f"{qid}: {len(prose)} 个事实点为无数字长句，建议改关键词集，如 {prose[0]!r}")
+    if bare:
+        warns.append(f"{qid}: {len(bare)} 个事实点只有数值无中文标签，换表述即无法定位，如 {bare[0]!r}")
 
 
 def main(path: str) -> int:
@@ -103,6 +118,8 @@ def main(path: str) -> int:
                     d.get("mandatory_points") or d.get("expected_answer_points")):
                 if not should_refuse:
                     warns.append(f"{qid}: 高风险题缺 mandatory_points/expected_answer_points（§3-5 逐条复核）")
+            if d.get("answerable", True) and d.get("expected_answer_points"):
+                lint_answer_points(d["expected_answer_points"], qid, warns)
     print(f"共 {n} 题；题型 {dict(types)}；风险 {dict(risks)}；阶段 {dict(stages)}")
     for w in warns:
         print(" !", w)

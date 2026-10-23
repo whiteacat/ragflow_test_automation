@@ -8,8 +8,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.metrics_generation import (  # noqa: E402
     abstention_correct,
     citation_complete,
+    fact_covered,
     forbidden_hit,
     fact_recall,
+    is_abstention,
     mandatory_recall,
     order_correct,
     unit_complete,
@@ -99,6 +101,22 @@ def test_abstention():
     assert abstention_correct(False, True, "知识库中没有相关内容，无法回答。") == 1
     assert abstention_correct(False, True, "额定电压25kV。") == 0
     assert abstention_correct(True, False, "额定电压25kV。") == 1
+
+
+def test_abstention_ignores_nested_uncertainty_in_long_answer():
+    ans = ("省煤器、水冷壁和过热器的水压试验压力为18.84MPa，超压试验压力为23.55MPa，"
+           "试验前应检查支吊架、膨胀指示及临时加固措施是否齐全可靠，"
+           "确认无误后按升压曲线分级升压，并在每级稳压检查无渗漏。"
+           "若现场条件不确定，应暂停并报告值长。")
+    assert not is_abstention(ans)
+    assert abstention_correct(True, False, ans) == 1
+
+
+def test_abstention_detected_at_head_of_long_answer():
+    ans = ("无法回答：知识库中未收录该机组2025年版本规程，"
+           "现有资料仅覆盖2023版，建议补充入库后再查询相关参数与操作步骤。")
+    assert is_abstention(ans)
+    assert abstention_correct(False, True, ans) == 1
 
 
 def test_forbidden():
@@ -251,3 +269,51 @@ def test_citation_ragflow_id_marker():
 def test_normalize_ignores_markdown_and_copula():
     assert fact_recall(["超压试验压力23.55MPa"],
                        "超压试验压力为**23.55MPa**。") == 1.0
+
+
+ANS001 = ("省煤器、水冷壁和过热器的水压试验压力为18.84MPa，"
+          "超压试验压力为23.55MPa。")
+ANS001_POINTS = ["水压试验18.84MPa", "超压试验23.55MPa",
+                 "两值均适用于省煤器、水冷壁、过热器"]
+
+
+def test_fact_covered_when_unit_word_inserted():
+    """标签与数值之间多一个“压力”量词，仍应判覆盖。"""
+    assert fact_covered("水压试验18.84MPa", ANS001)
+    assert fact_covered("超压试验23.55MPa", ANS001)
+
+
+def test_fact_recall_natural_phrasing_is_full():
+    assert fact_recall(ANS001_POINTS, ANS001) == 1.0
+
+
+def test_fact_covered_keyword_set_point():
+    """无数字的叙述点按关键词集判定，不要求逐字复述。"""
+    assert fact_covered("两值均适用于省煤器、水冷壁、过热器", ANS001)
+
+
+def test_fact_covered_unit_alias_and_table():
+    assert fact_covered("水压试验18.84MPa", "水压试验压力为18.84兆帕")
+    table = "| 名称 | 水压试验压力 | 超压试验压力 |\n| 省煤器 | 18.84 | 23.55 |"
+    assert fact_covered("水压试验18.84MPa", table)
+
+
+def test_fact_covered_rejects_wrong_number():
+    assert not fact_covered("超压试验23.55MPa", "超压试验压力为25.35MPa")
+    assert fact_recall(ANS001_POINTS, "超压试验压力为25.35MPa") < 1.0
+
+
+def test_fact_covered_multi_value_point():
+    assert fact_covered("再热器5.7MPa，水冷壁23.55MPa",
+                        "再热器超压试验压力为5.7MPa，水冷壁为23.55MPa。")
+    assert not fact_covered("再热器5.7MPa，水冷壁23.55MPa", "水冷壁23.55MPa。")
+
+
+def test_lint_answer_points_flags_unmatchable():
+    from scripts.validate_dataset import lint_answer_points
+    warns = []
+    lint_answer_points(["再热器5.7MPa，水冷壁23.55MPa",
+                        "18.84MPa",
+                        "两值均适用于省煤器、水冷壁、过热器且均以设计压力为基准不得超限"], "Q1", warns)
+    joined = "\n".join(warns)
+    assert "多个数值" in joined and "无数字长句" in joined and "只有数值" in joined

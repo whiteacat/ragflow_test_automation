@@ -23,25 +23,60 @@ CITATION_PATTERNS = [
 ]
 
 
+UNIT_ALIASES = (("兆帕", "mpa"), ("千帕", "kpa"), ("兆瓦", "mw"),
+                ("千瓦", "kw"), ("摄氏度", "℃"), ("公斤力", "kgf"))
+_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+_UNIT_RE = re.compile(r"(mpa|kpa|kgf|kn|kv|kw|mw|ma|r/min|t/h|n·m|nm|mm|℃|%|pa|v)")
+_FILLER_RE = re.compile(r"(两值均适用于|以上均适用于|均适用于|两值均|均适用|适用于|两值|均相同|相同|一致)")
+_LABEL_SPLIT = re.compile(r"[、，,；;：:/\u0001与和及]")
+_CELL_SEP = "\u0001"
+
+
 def normalize_text(s: str) -> str:
     s = unicodedata.normalize("NFKC", s or "")
     s = re.sub(r"[*_`#]", "", s)  # 去 Markdown 加粗/代码/标题符号，防 **23.55MPa** 误判
+    s = re.sub(r"[|｜]", _CELL_SEP, s)  # 表格竖线改分隔符：既断开数值，又不断开“MPa”
+    s = s.lower()
+    for cn, en in UNIT_ALIASES:
+        s = s.replace(cn, en)
     s = re.sub(r"\s+", "", s)
     s = re.sub(r"[的是为]", "", s)  # 去中文系词助词，双侧同去防“压力为23.55”误判
-    return s.lower()
+    return s
+
+
+def _num_key(token: str) -> str:
+    try:
+        return f"{float(token):.10g}"
+    except ValueError:
+        return token
+
+
+def _num_keys(text: str) -> set:
+    return {_num_key(t) for t in _NUM_RE.findall(text)}
+
+
+def _labels(text: str) -> List[str]:
+    t = _UNIT_RE.sub("", _NUM_RE.sub("", text))
+    t = _FILLER_RE.sub("、", t)
+    return [x for x in _LABEL_SPLIT.split(t) if len(x) >= 2]
 
 
 def fact_covered(fact: str, answer: str) -> bool:
-    """单条 required_fact 是否被答案覆盖（规则版：归一化包含）。"""
+    """单条事实是否被答案覆盖：数值按 token 全匹配 + 标签词全部出现。
+
+    直接子串命中仍优先（保持旧行为）；否则拆成「数值 + 标签」两路，
+    避免“水压试验18.84MPa”被答案“水压试验压力为18.84MPa”误判为未覆盖。
+    """
     f, a = normalize_text(fact), normalize_text(answer)
     if not f:
         return True
     if f in a:
         return True
-    # 长事实允许关键词级回退：分句后任一长度>=6的子句命中即算覆盖（防一刀切）
-    parts = re.split(r"[；;，。,、]", fact)
-    parts = [normalize_text(p) for p in parts if len(normalize_text(p)) >= 6]
-    return any(p in a for p in parts)
+    labels = _labels(f)
+    nums = _num_keys(f)
+    if nums and not nums <= _num_keys(a):
+        return False
+    return bool(labels) and all(lbl in a for lbl in labels)
 
 
 def fact_recall(required_facts: List[str], answer: str) -> Optional[float]:
@@ -52,9 +87,17 @@ def fact_recall(required_facts: List[str], answer: str) -> Optional[float]:
     return hits / len(required_facts)
 
 
+ABSTAIN_HEAD_CHARS = 60
+ABSTAIN_SHORT_CHARS = 80
+
+
 def is_abstention(answer: str) -> bool:
+    """拒答判定：短答案命中即可；长答案只看开头，避免正文里的“不确定”误判。"""
     a = normalize_text(answer)
-    return any(normalize_text(p) in a for p in ABSTAIN_PATTERNS)
+    if not a:
+        return False
+    head = a if len(a) <= ABSTAIN_SHORT_CHARS else a[:ABSTAIN_HEAD_CHARS]
+    return any(normalize_text(p) in head for p in ABSTAIN_PATTERNS)
 
 
 def abstention_correct(answerable: bool, must_abstain: bool, answer: str) -> Optional[int]:
@@ -124,8 +167,7 @@ def order_correct(required_facts: List[str], answer: str) -> Optional[int]:
         f_n = normalize_text(f)
         idx = a.find(f_n) if f_n else -1
         if idx < 0:
-            parts = [p for p in re.split(r"[；;，。,、]", f) if len(normalize_text(p)) >= 6]
-            hits = [a.find(normalize_text(p)) for p in parts]
+            hits = [a.find(lbl) for lbl in _labels(f)]
             hits = [h for h in hits if h >= 0]
             idx = min(hits) if hits else -1
         if idx < 0:
