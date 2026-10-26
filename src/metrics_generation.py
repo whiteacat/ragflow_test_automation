@@ -6,15 +6,24 @@ forbidden_claims（旧 forbidden_facts 只读兼容）、should_refuse（旧 mus
 from __future__ import annotations
 
 import re
-import unicodedata
 from statistics import mean
 from typing import Dict, List, Optional
+
+from .textnorm import CELL_SEP, UNIT_ALIASES, normalize, polarity  # noqa: F401
 
 ABSTAIN_PATTERNS = [
     "无法回答", "没有找到", "未找到相关", "知识库中没有", "不确定", "建议咨询",
     "转人工", "无法确认", "证据不足", "抱歉，我无法", "cannot answer",
     "not found in", "insufficient evidence", "不知道",
+    "未提及", "资料中未", "暂无相关", "暂无资料", "无法提供", "超出知识范围",
+    "建议联系", "需咨询", "暂无法", "no information", "not mentioned",
+    "cannot provide", "unable to answer",
 ]
+
+# 计量术语（不确定度/不确定因素）不是拒答，此前被「不确定」子串误伤
+ABSTAIN_MISFIRE_RE = re.compile(r"不确定(度|性|因素|区间|分析|来源|评定|原理)")
+
+ABSTAIN_LONG_CHARS = 200
 
 CITATION_PATTERNS = [
     r"【[^】]{1,80}】", r"\[[^\]]{1,60}(pdf|docx|doc|条款|第.{1,10}条|页)\]",
@@ -23,25 +32,15 @@ CITATION_PATTERNS = [
 ]
 
 
-UNIT_ALIASES = (("兆帕", "mpa"), ("千帕", "kpa"), ("兆瓦", "mw"),
-                ("千瓦", "kw"), ("摄氏度", "℃"), ("公斤力", "kgf"))
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 _UNIT_RE = re.compile(r"(mpa|kpa|kgf|kn|kv|kw|mw|ma|r/min|t/h|n·m|nm|mm|℃|%|pa|v)")
 _FILLER_RE = re.compile(r"(两值均适用于|以上均适用于|均适用于|两值均|均适用|适用于|两值|均相同|相同|一致)")
 _LABEL_SPLIT = re.compile(r"[、，,；;：:/\u0001与和及]")
-_CELL_SEP = "\u0001"
+_CELL_SEP = CELL_SEP
 
 
 def normalize_text(s: str) -> str:
-    s = unicodedata.normalize("NFKC", s or "")
-    s = re.sub(r"[*_`#]", "", s)  # 去 Markdown 加粗/代码/标题符号，防 **23.55MPa** 误判
-    s = re.sub(r"[|｜]", _CELL_SEP, s)  # 表格竖线改分隔符：既断开数值，又不断开“MPa”
-    s = s.lower()
-    for cn, en in UNIT_ALIASES:
-        s = s.replace(cn, en)
-    s = re.sub(r"\s+", "", s)
-    s = re.sub(r"[的是为]", "", s)  # 去中文系词助词，双侧同去防“压力为23.55”误判
-    return s
+    return normalize(s)
 
 
 def _num_key(token: str) -> str:
@@ -61,22 +60,36 @@ def _labels(text: str) -> List[str]:
     return [x for x in _LABEL_SPLIT.split(t) if len(x) >= 2]
 
 
+def _spans(text: str, tokens: List[str]) -> List[tuple[int, int]]:
+    out = []
+    for t in tokens:
+        if not t:
+            continue
+        i = text.find(t)
+        if i >= 0:
+            out.append((i, i + len(t)))
+    return out
+
+
 def fact_covered(fact: str, answer: str) -> bool:
     """单条事实是否被答案覆盖：数值按 token 全匹配 + 标签词全部出现。
 
-    直接子串命中仍优先（保持旧行为）；否则拆成「数值 + 标签」两路，
-    避免“水压试验18.84MPa”被答案“水压试验压力为18.84MPa”误判为未覆盖。
+    命中后再判语境极性：被否定的陈述（“不使用/不适用”）不算覆盖。
     """
     f, a = normalize_text(fact), normalize_text(answer)
     if not f:
         return True
     if f in a:
-        return True
+        i = a.find(f)
+        return polarity(a, i, i + len(f)) != "deny"
     labels = _labels(f)
     nums = _num_keys(f)
     if nums and not nums <= _num_keys(a):
         return False
-    return bool(labels) and all(lbl in a for lbl in labels)
+    if not labels or not all(lbl in a for lbl in labels):
+        return False
+    spans = _spans(a, labels + _NUM_RE.findall(f))
+    return not any(polarity(a, s, e) == "deny" for s, e in spans)
 
 
 def fact_recall(required_facts: List[str], answer: str) -> Optional[float]:
@@ -91,33 +104,65 @@ ABSTAIN_HEAD_CHARS = 60
 ABSTAIN_SHORT_CHARS = 80
 
 
-def is_abstention(answer: str) -> bool:
-    """拒答判定：短答案命中即可；长答案只看开头，避免正文里的“不确定”误判。"""
+def abstention_state(answer: str) -> Optional[int]:
+    """三态拒答：1=拒答，0=作答，None=长答案开头拒答后继续作答（转人工复核）。"""
     a = normalize_text(answer)
     if not a:
-        return False
+        return None
+    if ABSTAIN_MISFIRE_RE.search(a):
+        return 0
     head = a if len(a) <= ABSTAIN_SHORT_CHARS else a[:ABSTAIN_HEAD_CHARS]
-    return any(normalize_text(p) in head for p in ABSTAIN_PATTERNS)
+    if not any(normalize_text(p) in head for p in ABSTAIN_PATTERNS):
+        return 0
+    return 1 if len(a) <= ABSTAIN_LONG_CHARS else None
+
+
+def is_abstention(answer: str) -> bool:
+    return abstention_state(answer) == 1
 
 
 def abstention_correct(answerable: bool, must_abstain: bool, answer: str) -> Optional[int]:
     """GEN-05：应拒答(must_abstain 或 answerable=False)→拒答了=1；应回答→未拒答=1。"""
+    state = abstention_state(answer)
+    if state is None:
+        return None
     should_abstain = (not answerable) or must_abstain
-    refused = is_abstention(answer)
+    refused = bool(state)
     if should_abstain:
         return 1 if refused else 0
     return 1 if not refused else 0
 
 
-def forbidden_hit(forbidden_facts: List[str], answer: str) -> Optional[int]:
-    """GEN-09 规则版：出现任何禁止事项=1（失败）；无 forbidden 标注返回 None。"""
+def forbidden_scan(forbidden_facts: List[str], answer: str) -> Optional[Dict[str, List[str]]]:
+    """区分「真违规(hard)」与「安全警示/否定软命中(soft)」。
+
+    “严禁按 5.7MPa 执行”是正确警示，不应触发一票否决。
+    """
     if not forbidden_facts:
         return None
     a = normalize_text(answer)
+    hard: List[str] = []
+    soft: List[str] = []
     for f in forbidden_facts:
-        if normalize_text(f) and normalize_text(f) in a:
-            return 1
-    return 0
+        fn = normalize_text(f)
+        if not fn:
+            continue
+        i = a.find(fn)
+        if i < 0:
+            continue
+        if polarity(a, i, i + len(fn)) == "affirm":
+            hard.append(f)
+        else:
+            soft.append(f)
+    return {"hard": hard, "soft": soft}
+
+
+def forbidden_hit(forbidden_facts: List[str], answer: str) -> Optional[int]:
+    """GEN-09 规则版：真违规=1；安全警示不算违规；无 forbidden 标注返回 None。"""
+    scan = forbidden_scan(forbidden_facts, answer)
+    if scan is None:
+        return None
+    return 1 if scan["hard"] else 0
 
 
 def has_citation(answer: str) -> bool:
@@ -196,13 +241,17 @@ def score_generation_rule(question: dict, answer: str) -> Dict[str, Optional[flo
     mandatory = question.get("mandatory_points") or []
     forbidden = (question.get("forbidden_claims")
                  or question.get("forbidden_facts") or [])
-    abstained = is_abstention(answer)
+    state = abstention_state(answer)
+    abstained = state == 1
+    scan = forbidden_scan(forbidden, answer)
     out: Dict[str, Optional[float]] = {
         "fact_recall_rule": fact_recall(required, answer),
         "abstention_correct": abstention_correct(
             bool(question.get("answerable", True)),
             bool(question.get("must_abstain", question.get("should_refuse", False))), answer),
-        "forbidden_fact_hit": forbidden_hit(forbidden, answer),
+        "abstention_state": state,
+        "forbidden_fact_hit": None if scan is None else (1 if scan["hard"] else 0),
+        "forbidden_soft": None if scan is None else (1 if scan["soft"] else 0),
         "citation_complete_rule": citation_complete(
             bool(question.get("must_cite", True)), answer,
             bool(question.get("answerable", True)), abstained),
