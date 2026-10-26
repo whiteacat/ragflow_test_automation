@@ -80,6 +80,13 @@ def build_report(rows: List[Dict[str, Any]], lat: Dict[str, Any],
         m["GEN-02-fact"] = {"value": (tot_c / tot_t) if tot_t else None,
                             "covered": tot_c, "total": tot_t}
         m["GEN-02-题均"] = {"value": _mean(per_q), "n": len(per_q)}
+        relaxed = [r.get("fact_recall_relaxed") for r in rows
+                   if r.get("fact_recall_relaxed") is not None]
+        if relaxed:
+            m["GEN-02-relaxed"] = {
+                "value": _mean(relaxed), "n": len(relaxed),
+                "uncertain": sum(r.get("fact_uncertain_count") or 0 for r in rows),
+                "note": "分档加权 1.0/0.8/0.5/0：0.5 为数值存疑，计入放宽口径但不进严格口径"}
         # TRACE-01（本轮调用层面）
         tr = [r for r in rows if "trace_ok" in r]
         m["TRACE-01-call"] = {"value": (sum(1 for r in tr if r.get("trace_ok")) / len(tr))

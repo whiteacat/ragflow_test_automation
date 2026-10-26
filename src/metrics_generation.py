@@ -9,7 +9,7 @@ import re
 from statistics import mean
 from typing import Dict, List, Optional
 
-from . import embeddings
+from . import embeddings, synonyms
 from .textnorm import (
     CELL_SEP,
     normalize,
@@ -86,19 +86,11 @@ def _spans(text: str, tokens: List[str]) -> List[tuple[int, int]]:
     return out
 
 
-def _label_semantic_hit(labels: List[str], answer: str) -> bool:
-    """字面标签缺席时的语义兜底：每条标签都需在答案某句达到阈值。"""
-    if not embeddings.enabled():
-        return False
-    threshold = embeddings.settings().fact_label_threshold
-    sentences = embeddings.sentences(answer)
-    if not sentences:
-        return False
-    for label in labels:
-        sim = embeddings.best_similarity(label, sentences)
-        if sim is None or sim < threshold:
-            return False
-    return True
+PROXIMITY_WINDOW = 40          # 标签与数值的邻近窗口（字符）
+CREDIT_EXACT = 1.0             # 数值 + 标签（字面/同义词）命中且相邻
+CREDIT_NEAR = 0.8              # 数值命中，标签仅核心词/语义近似
+CREDIT_UNCERTAIN = 0.5         # 标签命中但数值缺失或离得太远
+FACT_COVERED_CREDIT = CREDIT_NEAR   # 严格口径：≥0.8 才算覆盖
 
 
 def _numbers_covered(fact_norm: str, f_nums, a_nums) -> bool:
@@ -109,35 +101,111 @@ def _numbers_covered(fact_norm: str, f_nums, a_nums) -> bool:
     return range_endpoint_hit(fact_norm, a_nums) is True
 
 
-def fact_covered(fact: str, answer: str) -> bool:
-    """单条事实是否被答案覆盖：数值按 token 全匹配 + 标签词全部出现。
+def _positions(text: str, tokens: List[str]) -> List[int]:
+    out: List[int] = []
+    for token in tokens:
+        if not token:
+            continue
+        start = 0
+        while True:
+            idx = text.find(token, start)
+            if idx < 0:
+                break
+            out.append(idx)
+            start = idx + 1
+    return out
 
-    命中后再判语境极性：被否定的陈述（“不使用/不适用”）不算覆盖。
+
+def _label_levels(labels: List[str], answer: str, answer_norm: str) -> List[int]:
+    """每个标签的命中等级：2=字面/同义词，1=核心词共现，0=语义，-1=未命中。"""
+    levels: List[int] = []
+    semantic_threshold = (embeddings.settings().fact_label_threshold
+                          if embeddings.enabled() else None)
+    sentences = embeddings.sentences(answer) if semantic_threshold is not None else []
+    for label in labels:
+        if any(v in answer_norm for v in synonyms.variants(label)):
+            levels.append(2)
+            continue
+        cores = synonyms.core(label)
+        if cores and all(c in answer_norm for c in cores):
+            levels.append(1)
+            continue
+        if semantic_threshold is not None and sentences:
+            sim = embeddings.best_similarity(label, sentences)
+            if sim is not None and sim >= semantic_threshold:
+                levels.append(0)
+                continue
+        levels.append(-1)
+    return levels
+
+
+def fact_credit(fact: str, answer: str) -> float:
+    """单条事实的覆盖分档：1.0 / 0.8 / 0.5 / 0。
+
+    - 1.0：数值(若有)全部精确命中 + 标签字面或同义词命中，且数值与标签在
+      ``PROXIMITY_WINDOW`` 字内共现
+    - 0.8：数值命中，但标签只靠核心词/语义近似
+    - 0.5：标签命中，数值缺失或离得太远（计入不确定，进复核而非直接判错）
+    - 0：标签未命中，或被否定语境（“不使用/不适用”）否定
     """
     f, a = normalize_text(fact), normalize_text(answer)
     if not f:
-        return True
-    if f in a:
-        i = a.find(f)
-        return polarity(a, i, i + len(f)) != "deny"
+        return CREDIT_EXACT
+    idx = a.find(f)
+    if idx >= 0:
+        return 0.0 if polarity(a, idx, idx + len(f)) == "deny" else CREDIT_EXACT
     labels = _labels(f)
     f_nums = numbers(f)
-    if f_nums and not _numbers_covered(f, f_nums, numbers(a)):
-        return False
-    if not labels:
-        return False
-    if not all(lbl in a for lbl in labels) and not _label_semantic_hit(labels, answer):
-        return False
+    a_nums = numbers(a)
+    levels = _label_levels(labels, answer, a) if labels else []
+    if any(level < 0 for level in levels):
+        return 0.0
+    if f_nums and not _numbers_covered(f, f_nums, a_nums):
+        return CREDIT_UNCERTAIN if labels else 0.0
+    if f_nums and labels:
+        variants = [v for label in labels for v in synonyms.variants(label)]
+        label_pos = _positions(a, variants)
+        num_pos = _positions(a, [n.raw for n in f_nums])
+        if label_pos and num_pos and not all(
+                min(abs(num - lab) for lab in label_pos) <= PROXIMITY_WINDOW
+                for num in num_pos):
+            return CREDIT_UNCERTAIN
     spans = _spans(a, labels + [n.raw for n in f_nums])
-    return not any(polarity(a, s, e) == "deny" for s, e in spans)
+    if any(polarity(a, s, e) == "deny" for s, e in spans):
+        return 0.0
+    if not labels:
+        return CREDIT_EXACT if f_nums else 0.0
+    return CREDIT_NEAR if any(level <= 1 for level in levels) else CREDIT_EXACT
+
+
+def fact_covered(fact: str, answer: str) -> bool:
+    """严格口径：分档分 ≥0.8 才算覆盖（数值缺失或离得太远记 0.5，不算覆盖）。"""
+    return fact_credit(fact, answer) >= FACT_COVERED_CREDIT
+
+
+def fact_uncertain(fact: str, answer: str) -> bool:
+    """标签命中但数值存疑（缺失/离得太远），应进复核队列而非直接判错。"""
+    return abs(fact_credit(fact, answer) - CREDIT_UNCERTAIN) < 1e-9
 
 
 def fact_recall(required_facts: List[str], answer: str) -> Optional[float]:
-    """GEN-02 规则版。无 required_facts 返回 None（不计入）。"""
+    """GEN-02 严格口径（二值）。无 required_facts 返回 None（不计入）。"""
     if not required_facts:
         return None
     hits = sum(1 for f in required_facts if fact_covered(f, answer))
     return hits / len(required_facts)
+
+
+def fact_recall_relaxed(required_facts: List[str], answer: str) -> Optional[float]:
+    """GEN-02 放宽口径（分档加权）：1.0/0.8/0.5/0，供与严格口径对照。"""
+    if not required_facts:
+        return None
+    return sum(fact_credit(f, answer) for f in required_facts) / len(required_facts)
+
+
+def fact_uncertain_count(required_facts: List[str], answer: str) -> int:
+    """需人工复核的事实条数（标签命中但数值存疑）。"""
+    return sum(1 for f in required_facts if fact_uncertain(f, answer))
 
 
 ABSTAIN_HEAD_CHARS = 60
@@ -247,30 +315,80 @@ def latency_stats(e2e_ms: List[float]) -> Dict[str, Optional[float]]:
 UNIT_PATTERN = re.compile(r"(MPa|kPa|Pa|kV|V|A|mA|℃|°C|N·m|Nm|r/min|mm|t/h|MW|kW|%)")
 
 
+def _fact_anchor(answer_norm: str, fact_norm: str, labels: List[str], nums) -> int:
+    """事实在答案中的锚点：优先整串连续段，其次「数值+标签」40 字内聚簇，最后单侧。
+
+    只取最早出现的**连续段**，避免开头「如前所述，水压试验…」的顺带提及
+    把位置拉到正文之前，造成逆序误判（O2）。
+    """
+    if fact_norm:
+        idx = answer_norm.find(fact_norm)
+        if idx >= 0:
+            return idx
+    label_pos = _positions(answer_norm, labels)
+    num_pos = _positions(answer_norm, [n.raw for n in nums])
+    if label_pos and num_pos:
+        starts = []
+        for num in num_pos:
+            nearest = min(label_pos, key=lambda lab: abs(lab - num))
+            if abs(nearest - num) <= PROXIMITY_WINDOW:
+                starts.append(min(num, nearest))
+        if starts:
+            return min(starts)
+    if label_pos:
+        return min(label_pos)
+    if num_pos:
+        return min(num_pos)
+    return -1
+
+
 def order_correct(required_facts: List[str], answer: str) -> Optional[int]:
+    """GEN-ORDER：事实锚点单调不减 → 1。
+
+    事实只有标签命中（数值缺失）时用标签位置代替，不再整题返回 None（O1）。
+    """
     if len(required_facts) < 2:
         return None
     a = normalize_text(answer)
-    pos = []
+    pos: List[int] = []
     for f in required_facts:
-        f_n = normalize_text(f)
-        idx = a.find(f_n) if f_n else -1
-        if idx < 0:
-            hits = [a.find(lbl) for lbl in _labels(f)]
-            hits = [h for h in hits if h >= 0]
-            idx = min(hits) if hits else -1
+        fn = normalize_text(f)
+        idx = _fact_anchor(a, fn, _labels(fn), numbers(fn))
         if idx < 0:
             return None
         pos.append(idx)
     return 1 if pos == sorted(pos) else 0
 
 
+def _fact_present(fact: str, answer: str) -> bool:
+    """事实是否在答案中出现：整串 / 标签全中 / 数值全中，三者任一即可。"""
+    fn, a = normalize_text(fact), normalize_text(answer)
+    if not fn:
+        return True
+    if fn in a:
+        return True
+    labels = _labels(fn)
+    if labels and all(label in a for label in labels):
+        return True
+    f_nums = numbers(fn)
+    a_nums = numbers(a)
+    return bool(f_nums) and all(any(num_matches(n, an) for an in a_nums) for n in f_nums)
+
+
 def unit_complete(required_facts: List[str], answer: str) -> Optional[int]:
-    units = {u for f in required_facts for u in UNIT_PATTERN.findall(f or "")}
+    """GEN-UNIT：只统计确实出现的事实的单位，整条缺失的事实不拉低该项（O1）。"""
+    units = set()
+    for f in required_facts:
+        found = {u for u in UNIT_PATTERN.findall(f or "")}
+        if not found:
+            continue
+        if not _fact_present(f, answer):
+            continue
+        units |= {normalize_text(u) for u in found}
     if not units:
         return None
     a = normalize_text(answer)
-    return 1 if all(normalize_text(u) in a for u in units) else 0
+    return 1 if all(u in a for u in units) else 0
 
 
 def mandatory_recall(mandatory_points: List[str], answer: str) -> Optional[float]:
@@ -290,6 +408,8 @@ def score_generation_rule(question: dict, answer: str) -> Dict[str, Optional[flo
     scan = forbidden_scan(forbidden, answer)
     out: Dict[str, Optional[float]] = {
         "fact_recall_rule": fact_recall(required, answer),
+        "fact_recall_relaxed": fact_recall_relaxed(required, answer),
+        "fact_uncertain_count": None if not required else fact_uncertain_count(required, answer),
         "abstention_correct": abstention_correct(
             bool(question.get("answerable", True)),
             bool(question.get("must_abstain", question.get("should_refuse", False))), answer),
