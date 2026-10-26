@@ -155,13 +155,20 @@ def _bigrams(s: str) -> set:
     return {s[i:i + 2] for i in range(len(s) - 1)}
 
 
-def _clause_hit(clause: str, full: str, full_grams: set) -> bool:
-    if clause in full:
-        return True
+def bigram_recall(clause: str, full: str, full_grams: Optional[set] = None) -> float:
+    """分句在全文中的字二元组召回率（0~1），供模糊命中与阈值校准共用。"""
     grams = _bigrams(clause)
     if not grams:
-        return False
-    return len(grams & full_grams) / len(grams) >= CLAUSE_FUZZY_THRESHOLD
+        return 0.0
+    if full_grams is None:
+        full_grams = _bigrams(full)
+    return len(grams & full_grams) / len(grams)
+
+
+def clause_hit(clause: str, full: str, full_grams: Optional[set] = None) -> bool:
+    if clause in full:
+        return True
+    return bigram_recall(clause, full, full_grams) >= CLAUSE_FUZZY_THRESHOLD
 
 
 def _clause_semantic_hit(clause: str, contents: List[str]) -> bool:
@@ -188,7 +195,7 @@ def evidence_cover(evidence: str, contents: List[str]) -> Optional[float]:
     hits = 0
     for c in clauses:
         clause = normalize_text(c)
-        if _clause_hit(clause, full, full_grams) or _clause_semantic_hit(clause, contents):
+        if clause_hit(clause, full, full_grams) or _clause_semantic_hit(clause, contents):
             hits += 1
     return hits / len(clauses)
 

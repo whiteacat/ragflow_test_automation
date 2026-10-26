@@ -70,6 +70,11 @@ def _labels(text: str) -> List[str]:
     return [x for x in _LABEL_SPLIT.split(t) if len(x) >= 2]
 
 
+def fact_labels(text: str) -> List[str]:
+    """事实中的标签词（去掉数值与单位），供校准/调试复用同一口径。"""
+    return _labels(normalize_text(text))
+
+
 def _spans(text: str, tokens: List[str]) -> List[tuple[int, int]]:
     out = []
     for t in tokens:

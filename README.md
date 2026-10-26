@@ -200,7 +200,76 @@ python scripts/qa_single.py --config config/test.yaml --question "水冷壁超�
 # 类 Ragas 四指标（Context Precision/Recall、Faithfulness、Answer Relevancy，规则版下限）
 python scripts/ragas_like.py --per-question results/<experiment_id>/per_question.jsonl \
     --golden datasets/xlsx_golden.jsonl --k 5 --out /tmp/ragas.jsonl
+# 阈值校准：人工标注样本扫描 fact/evidence/fuzzy 阈值（详见下节）
+python scripts/calibrate_thresholds.py --config config/test.yaml \
+    --data datasets/calibration.jsonl --kind all --out results/calibration
 ```
+
+## 判定口径与阈值校准
+
+### 规则判定口径（已落地）
+
+| 环节 | 口径 | 说明 |
+|---|---|---|
+| 归一化 | NFKC + 去零宽/隐藏空格 + 单位别名（兆帕→MPa、摄氏度→°C）+ 千分位 + `至/到/～/—`→`~` | 两侧统一归一化后再比较，`18.84 MPa` 与 `18.84MPa` 等价 |
+| 禁止项 GEN-09 | 命中词 + **同分句**否定语境判定 | 「严禁按 5.7MPa 执行」「不得使用 XX」判为警示，不触发否决；真违规仍记 1 |
+| 数值匹配 GEN-02 | **十进制精确相等，无容差** | `18.84≠18.8`、`18.84≡18.840`；同量纲换算后精确相等才算命中（`0.6MPa≡600kPa`、`1kW≡1000W`、`0.6kgf/cm²≡0.0588399MPa`）；区间只认端点，中间值不覆盖 |
+| 引用 GEN-10 | 强/弱双档 | 强模式（`【】`、`《》`、裸文件名、`来源：`、`依据/根据+条款号`、`GB/DL/NB`）全文匹配；弱模式（`[1]`、`[^1]`、`(1)`）只在**末尾 200 字**生效，避免正文序号误判 |
+| 拒答 GEN-05 | 三态 `abstention_state` | 1=拒答 / 0=作答 / `None`=长答案先拒后答等混合情形（不进分母、进复核队列）；`不确定度/不确定性` 等计量术语不判拒答 |
+| 证据覆盖 | 归一化 + 字二元组 ≥0.85 兜底 | 换行/空格造成的切句差异不再掉分；跨段断裂的近似表述也能命中 |
+| 跨文档 RAG-10 | gold 纳入 `acceptable_chunks` | 只填了可接受 chunk 的题不再被当 `None` 跳过 |
+
+> 验收阈值（`THRESHOLDS` / `STAGE_GATES` / `VETO`）本轮**未改动**：口径修正只影响分子/分母判定，不放宽验收线。
+
+### 语义兜底（可选，默认关闭）
+
+配置 `embedding:` 段后生效，**只补漏、不改判**（已命中的规则结论不会被推翻）：
+
+```yaml
+embedding:
+  enabled: true
+  interface: "openai"          # openai=POST {base_url}/embeddings | tei=POST {base_url}/embed
+  base_url: "http://127.0.0.1:9997/v1"
+  model: "bge-m3"
+  dim: 1024
+  fact_label_threshold: 0.75
+  evidence_threshold: 0.80
+```
+
+生效位置：
+- `fact_covered`：标签字面缺席时，取「标签 vs 答案单句」的最大余弦，所有标签都需达阈值
+- `evidence_cover`：分句字面与二元组都没命中时，取「分句 vs TopK 单句」的最大余弦
+
+数值判定不参与语义兜底（有测试锁定）；服务不可用/超时自动降级为 `None` 并记 `last_error()`，跑批不中断。
+
+### 阈值校准
+
+```bash
+# 1) 先看标注格式
+python scripts/calibrate_thresholds.py --emit-template
+
+# 2) 用人工标注样本扫描（fact/evidence 需 embedding.enabled=true；fuzzy 不需要）
+python scripts/calibrate_thresholds.py --config config/test.yaml \
+    --data datasets/calibration.jsonl --kind all \
+    --grid 0.60:0.95:0.05 --min-precision 0.95 --out results/calibration
+```
+
+样本 jsonl 每行一条，`label` 填人工结论（1=应命中，0=不应命中）：
+
+```jsonl
+{"kind":"fact","fact":"给水泵出口压力0.6MPa","answer":"泵出口压力为0.6MPa","label":1}
+{"kind":"fact","fact":"水压试验压力18.84MPa","answer":"水压试验压力为18.8MPa","label":0}
+{"kind":"evidence","evidence":"给水泵出口压力不低于0.6MPa","chunk":"泵的出口压力须保持在0.6MPa以上","label":1}
+{"kind":"fuzzy","clause":"给水泵出口压力不低于0.6MPa","chunk":"泵出口压力保持0.6MPa以上","label":0}
+```
+
+建议每行只放一个要点 / 一个分句，标注才可解释。脚本输出：
+- 终端 markdown 表：每个阈值的 TP/FP/FN/TN + precision/recall/F1，✅ 标出推荐值
+- `results/calibration/<kind>_calibration.json`：逐条分数、混淆矩阵、推荐阈值、分数分布
+
+推荐规则：在 `precision ≥ --min-precision` 且 `recall ≥ --min-recall` 的阈值中取 F1 最高（并列取更高阈值）；都不满足时退回 F1 最高并提示「先扩充/复核样本」。`fuzzy` 的结论对应代码常量 `CLAUSE_FUZZY_THRESHOLD`（`src/metrics_retrieval.py`），`fact`/`evidence` 对应配置项 `fact_label_threshold` / `evidence_threshold`。
+
+> 注意：语义阈值依赖 embedding 质量与样本分布，**必须先跑校准再改配置**；样本少于 50 条时结论仅供参考。
 
 ## 产物（`results/<experiment_id>/`）
 
