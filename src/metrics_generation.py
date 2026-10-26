@@ -9,6 +9,7 @@ import re
 from statistics import mean
 from typing import Dict, List, Optional
 
+from . import embeddings
 from .textnorm import (
     CELL_SEP,
     normalize,
@@ -80,6 +81,21 @@ def _spans(text: str, tokens: List[str]) -> List[tuple[int, int]]:
     return out
 
 
+def _label_semantic_hit(labels: List[str], answer: str) -> bool:
+    """字面标签缺席时的语义兜底：每条标签都需在答案某句达到阈值。"""
+    if not embeddings.enabled():
+        return False
+    threshold = embeddings.settings().fact_label_threshold
+    sentences = embeddings.sentences(answer)
+    if not sentences:
+        return False
+    for label in labels:
+        sim = embeddings.best_similarity(label, sentences)
+        if sim is None or sim < threshold:
+            return False
+    return True
+
+
 def _numbers_covered(fact_norm: str, f_nums, a_nums) -> bool:
     if not a_nums:
         return False
@@ -103,7 +119,9 @@ def fact_covered(fact: str, answer: str) -> bool:
     f_nums = numbers(f)
     if f_nums and not _numbers_covered(f, f_nums, numbers(a)):
         return False
-    if not labels or not all(lbl in a for lbl in labels):
+    if not labels:
+        return False
+    if not all(lbl in a for lbl in labels) and not _label_semantic_hit(labels, answer):
         return False
     spans = _spans(a, labels + [n.raw for n in f_nums])
     return not any(polarity(a, s, e) == "deny" for s, e in spans)

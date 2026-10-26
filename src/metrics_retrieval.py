@@ -9,6 +9,7 @@ import math
 import re
 from typing import Dict, List, Optional
 
+from . import embeddings
 from .models import GoldenItem, RetrievedChunk
 from .textnorm import normalize as normalize_text
 
@@ -163,13 +164,32 @@ def _clause_hit(clause: str, full: str, full_grams: set) -> bool:
     return len(grams & full_grams) / len(grams) >= CLAUSE_FUZZY_THRESHOLD
 
 
+def _clause_semantic_hit(clause: str, contents: List[str]) -> bool:
+    """字面与二元组都没命中时的语义兜底（需配置 embedding）。"""
+    if not embeddings.enabled():
+        return False
+    sentences: List[str] = []
+    for content in contents:
+        sentences.extend(embeddings.sentences(content))
+        if len(sentences) >= 60:
+            break
+    if not sentences:
+        return False
+    sim = embeddings.best_similarity(clause, sentences[:60])
+    return sim is not None and sim >= embeddings.settings().evidence_threshold
+
+
 def evidence_cover(evidence: str, contents: List[str]) -> Optional[float]:
     clauses = split_clauses(evidence)
     if not clauses:
         return None
     full = normalize_text("\n".join(contents))
     full_grams = _bigrams(full)
-    hits = sum(1 for c in clauses if _clause_hit(normalize_text(c), full, full_grams))
+    hits = 0
+    for c in clauses:
+        clause = normalize_text(c)
+        if _clause_hit(clause, full, full_grams) or _clause_semantic_hit(clause, contents):
+            hits += 1
     return hits / len(clauses)
 
 

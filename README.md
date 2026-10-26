@@ -43,6 +43,7 @@ cp config/test.yaml.example config/test.yaml
 | `judge.timeout / qps` | 复核单条超时（默认 120s）与限速（默认 1 qps），27B 等慢模型可调 |
 | `parse.baseline/document_id` | 解析比对的基线文件与 RAGFlow 侧文档 |
 | `tier.active` | 测试集分层：`core` 核心金标准 / `extended` 扩展回归 / `adversarial` 对抗 |
+| `embedding.enabled` | 可选语义兜底（本地 bge-m3），默认 `false`；`interface` 选 `openai`（`/v1/embeddings`）或 `tei`（`/embed`），填好 `base_url`/`model`/`dim` 即生效，关闭时判定与未引入 embedding 完全一致 |
 
 ### 本地 rerank（vLLM）配置要点
 

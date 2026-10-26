@@ -55,3 +55,23 @@ judge:
   api_key: null
   model: null
   # response_format: "json_object"  # Ollama/vLLM 强制 JSON 输出（Qwen3 思考模型建议开）
+
+embedding:
+  # 可选：本地 bge-m3 语义兜底。仅在「字面规则 + 二元组模糊」都没命中时才补漏，
+  # 不会放宽任何已通过的判定；enabled=false 时所有指标与未引入 embedding 完全一致。
+  enabled: false
+  # openai = POST {base_url}/embeddings（vLLM / Ollama / TEI 的 OpenAI 兼容端点）
+  # tei    = POST {base_url}/embed（HuggingFace text-embeddings-inference 原生接口）
+  interface: "openai"
+  # 例：vLLM   http://127.0.0.1:9997/v1
+  #     Ollama http://127.0.0.1:11434/v1
+  #     TEI    http://127.0.0.1:8080（interface 填 tei；其 OpenAI 兼容路径是 /v1）
+  base_url: ""
+  model: "bge-m3"
+  api_key: ""                  # 也可用环境变量 EMBEDDING_API_KEY 覆盖
+  dim: 1024                    # bge-m3 输出 1024 维，换模型时同步改
+  timeout_s: 30
+  batch_size: 32
+  # 语义兜底阈值（余弦相似度），只补漏不覆盖规则命中；建议先用校准集验证再调
+  fact_label_threshold: 0.75   # 事实标签 vs 答案单句
+  evidence_threshold: 0.80     # 证据分句 vs TopK 内容单句

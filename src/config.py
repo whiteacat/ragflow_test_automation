@@ -16,4 +16,7 @@ def load_config(path: str) -> Dict[str, Any]:
         cfg["ragflow"]["api_key"] = os.environ["RAGFLOW_API_KEY"]
     if os.environ.get("RAGFLOW_BASE_URL"):
         cfg["ragflow"]["base_url"] = os.environ["RAGFLOW_BASE_URL"]
+    # 可选语义兜底（bge-m3）：未启用时 rules 判定完全不受影响
+    from .embeddings import configure as _configure_embeddings
+    _configure_embeddings(cfg.get("embedding"))
     return cfg
