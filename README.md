@@ -200,9 +200,11 @@ python scripts/qa_single.py --config config/test.yaml --question "水冷壁超�
 # 类 Ragas 四指标（Context Precision/Recall、Faithfulness、Answer Relevancy，规则版下限）
 python scripts/ragas_like.py --per-question results/<experiment_id>/per_question.jsonl \
     --golden datasets/xlsx_golden.jsonl --k 5 --out /tmp/ragas.jsonl
-# 阈值校准：人工标注样本扫描 fact/evidence/fuzzy 阈值（详见下节）
+# 阈值校准：① 从跑批结果抽候选并预标 → ② 人工确认 → ③ 扫描阈值（详见下节）
+python scripts/make_calibration_set.py --per-question results/<experiment_id>/per_question.jsonl \
+    --out datasets/calibration_candidates.jsonl --review-out datasets/calibration_review.jsonl
 python scripts/calibrate_thresholds.py --config config/test.yaml \
-    --data datasets/calibration.jsonl --kind all --out results/calibration
+    --data datasets/calibration_candidates.jsonl --kind all --out results/calibration
 ```
 
 ## 判定口径与阈值校准
@@ -244,8 +246,18 @@ embedding:
 
 ### 阈值校准
 
+分三步：**抽候选并预标 → 人工确认 label → 扫描阈值**。
+
 ```bash
-# 1) 先看标注格式
+# 1) 从跑批结果抽候选样本（自动预标 + 待确认清单）
+python scripts/make_calibration_set.py \
+    --per-question results/<experiment_id>/per_question.jsonl \
+    --out datasets/calibration_candidates.jsonl \
+    --review-out datasets/calibration_review.jsonl \
+    --max-per-kind 80 --cross-negatives 1
+
+# 2) 人工确认：只改 review 文件里 label 为 null 的行（改成 0/1），回填候选文件
+#    预览标注格式：
 python scripts/calibrate_thresholds.py --emit-template
 
 # 2) 用人工标注样本扫描（fact/evidence 需 embedding.enabled=true；fuzzy 不需要）
@@ -253,6 +265,19 @@ python scripts/calibrate_thresholds.py --config config/test.yaml \
     --data datasets/calibration.jsonl --kind all \
     --grid 0.60:0.95:0.05 --min-precision 0.95 --out results/calibration
 ```
+
+**候选抽取的预标判据**（只用与待校准信号无关的判据，避免自证）：
+
+| basis | 含义 | 预标 |
+|---|---|---|
+| `literal` | 归一化后字面包含 | 1 |
+| `number_mismatch` | 数值十进制精确比较后对不上 | 0 |
+| `cross_question` | 与另一题（不同改写组/文档）的答案或片段配对 | 0 |
+| `needs_review` | 规则无法判断（改述/语义相近，正是要人判的样本） | `null` |
+
+`label` 为 `null` 的行会被校准脚本跳过并提示条数；每个 kind 默认限量 80 条，且优先保留 `needs_review` 与 `cross_question`（信息量最大）。`--chunks /tmp/chunk_candidates.jsonl`（`assist_chunk_mapping.py` 的产出）可提供未截断的片段，否则用 `evidence_snippet`（每条截断 300 字），此时数字冲突判据自动跳过。
+
+`--cross-negatives 1` 表示每题再构造 1 条跨题负例；真实跑批里本来就有的错答（`number_mismatch`）会自然进样本，一般够用，跨题负例用于补足负例数量。
 
 样本 jsonl 每行一条，`label` 填人工结论（1=应命中，0=不应命中）：
 
