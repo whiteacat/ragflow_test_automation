@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
 UNIT_ALIASES = (("兆帕", "mpa"), ("千帕", "kpa"), ("兆瓦", "mw"),
                 ("千瓦", "kw"), ("摄氏度", "°c"), ("公斤力", "kgf"))
@@ -71,3 +73,82 @@ def polarity(text: str, start: int, end: int, span: int = 15) -> str:
     if any(k in win for k in NEG_WEAK):
         return "weak_neg"
     return "affirm"
+
+UNIT_DIM = {
+    "pa": ("pressure", Decimal("1")), "kpa": ("pressure", Decimal("1000")),
+    "mpa": ("pressure", Decimal("1000000")), "bar": ("pressure", Decimal("100000")),
+    "kgf/cm2": ("pressure", Decimal("98066.5")),
+    "kg/cm2": ("pressure", Decimal("98066.5")),
+    "v": ("voltage", Decimal("1")), "kv": ("voltage", Decimal("1000")),
+    "a": ("current", Decimal("1")), "ma": ("current", Decimal("0.001")),
+    "w": ("power", Decimal("1")), "kw": ("power", Decimal("1000")),
+    "mw": ("power", Decimal("1000000")),
+    "mm": ("length", Decimal("1")), "t/h": ("flow", Decimal("1")),
+    "r/min": ("speed", Decimal("1")), "n·m": ("torque", Decimal("1")),
+    "nm": ("torque", Decimal("1")),
+    "°c": ("temperature", Decimal("1")), "%": ("percent", Decimal("1")),
+}
+
+_UNIT_ALT = ("kgf/cm2|kg/cm2|r/min|n·m|t/h|mpa|kpa|bar|kw|mw|kv|ma|mm|nm|pa|°c|%|w|v|a")
+_NUM_UNIT_RE = re.compile(rf"(\d+(?:\.\d+)?)({_UNIT_ALT})?")
+_RANGE_PAIR_RE = re.compile(rf"(\d+(?:\.\d+)?)~(\d+(?:\.\d+)?)({_UNIT_ALT})?")
+
+
+@dataclass(frozen=True)
+class Num:
+    raw: str
+    value: Decimal
+    unit: str
+    start: int
+
+
+def numbers(text: str) -> list[Num]:
+    out: list[Num] = []
+    for m in _NUM_UNIT_RE.finditer(text):
+        raw = m.group(1)
+        try:
+            value = Decimal(raw)
+        except InvalidOperation:
+            continue
+        out.append(Num(raw, value, m.group(2) or "", m.start()))
+    return out
+
+
+def canon(n: Num) -> tuple[str, Decimal] | None:
+    spec = UNIT_DIM.get(n.unit)
+    if not spec:
+        return None
+    dim, factor = spec
+    return dim, n.value * factor
+
+
+def num_matches(fact: Num, answer: Num) -> bool:
+    """完全一致：同量纲按基准单位精确比较，不做任何舍入或容差。"""
+    cf, ca = canon(fact), canon(answer)
+    if cf and ca:
+        return cf[0] == ca[0] and cf[1] == ca[1]
+    return fact.value == answer.value
+
+
+def range_endpoint_hit(fact_norm: str, answer_numbers: list[Num]) -> bool | None:
+    """事实给出 a~b 区间时，答案须精确等于某个端点才算覆盖（中间值不算）；无区间返回 None。"""
+    m = _RANGE_PAIR_RE.search(fact_norm)
+    if not m:
+        return None
+    unit = m.group(3) or ""
+    spec = UNIT_DIM.get(unit)
+    endpoints: list[tuple[str, Decimal]] = []
+    for raw in (m.group(1), m.group(2)):
+        value = Decimal(raw)
+        endpoints.append((spec[0], value * spec[1]) if spec else ("", value))
+    for n in answer_numbers:
+        c = canon(n)
+        if spec:
+            if not c or c[0] != spec[0]:
+                continue
+            value = c[1]
+        else:
+            value = n.value
+        if any(value == ep[1] for ep in endpoints):
+            return True
+    return False

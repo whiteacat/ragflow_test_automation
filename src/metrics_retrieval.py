@@ -10,6 +10,9 @@ import re
 from typing import Dict, List, Optional
 
 from .models import GoldenItem, RetrievedChunk
+from .textnorm import normalize as normalize_text
+
+CLAUSE_FUZZY_THRESHOLD = 0.85
 
 
 def _norm(s: str) -> str:
@@ -122,11 +125,12 @@ def attachment_recall(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optio
 def cross_doc_coverage(golden: GoldenItem, chunks: List[RetrievedChunk]) -> Optional[int]:
     if golden.question_type not in ("multi_document",):
         return None
-    if not golden.chunk_ids and not golden.expected_chunk:
-        return None
-    gold = {_norm(c) for c in golden.chunk_ids}
+    gold = {_norm(c) for c in golden.chunk_ids if c}
     if golden.expected_chunk:
         gold.add(_norm(golden.expected_chunk))
+    gold |= {_norm(c) for c in (golden.acceptable_chunks or []) if c}
+    if not gold:
+        return None
     seen = {_norm(c.chunk_id) for c in chunks} | {_norm(c.document_id) for c in chunks}
     return 1 if gold <= seen else 0
 
@@ -146,12 +150,26 @@ def split_clauses(text: str) -> List[str]:
             if len(_norm(p)) >= 4]
 
 
+def _bigrams(s: str) -> set:
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+def _clause_hit(clause: str, full: str, full_grams: set) -> bool:
+    if clause in full:
+        return True
+    grams = _bigrams(clause)
+    if not grams:
+        return False
+    return len(grams & full_grams) / len(grams) >= CLAUSE_FUZZY_THRESHOLD
+
+
 def evidence_cover(evidence: str, contents: List[str]) -> Optional[float]:
     clauses = split_clauses(evidence)
     if not clauses:
         return None
-    norm_full = _norm("\n".join(contents))
-    hits = sum(1 for c in clauses if _norm(c) in norm_full)
+    full = normalize_text("\n".join(contents))
+    full_grams = _bigrams(full)
+    hits = sum(1 for c in clauses if _clause_hit(normalize_text(c), full, full_grams))
     return hits / len(clauses)
 
 

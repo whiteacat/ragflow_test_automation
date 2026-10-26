@@ -1,13 +1,16 @@
-"""P0 口径修正：归一化、否定语境、拒答三态。"""
+"""指标口径修正用例：归一化、否定语境、拒答三态、数值容差、引用识别。"""
 from src.metrics_generation import (
     abstention_correct,
     abstention_state,
     fact_covered,
     forbidden_hit,
     forbidden_scan,
+    has_citation,
     is_abstention,
     normalize_text,
 )
+from src.metrics_retrieval import cross_doc_coverage, evidence_cover
+from src.models import GoldenItem, RetrievedChunk
 from src.textnorm import normalize, polarity
 
 
@@ -92,3 +95,59 @@ def test_abstention_long_preamble_is_uncertain():
     assert len(normalize_text(ans)) > 200
     assert abstention_state(ans) is None
     assert abstention_correct(False, True, ans) is None
+
+
+def test_fact_covered_requires_exact_numbers():
+    assert not fact_covered("水压试验18.84MPa", "水压试验压力为18.8MPa")
+    assert fact_covered("水压试验18.84MPa", "水压试验压力为18.840MPa")
+    assert not fact_covered("水压试验18.84MPa", "水压试验压力为18.9MPa")
+    assert fact_covered("过热器出口温度541℃", "过热器出口温度为541°C")
+
+
+def test_fact_covered_unit_conversion():
+    assert fact_covered("给水泵出口压力0.6MPa", "给水泵出口压力600kPa")
+    assert fact_covered("给水泵电机功率1kW", "给水泵电机功率1000W")
+    assert not fact_covered("给水泵出口压力0.6MPa", "给水泵出口压力0.8MPa")
+
+
+def test_fact_covered_rejects_dimension_mismatch():
+    assert not fact_covered("额定电压5.7MPa", "额定电压5.7kV")
+
+
+def test_fact_covered_range_endpoints_only():
+    assert fact_covered("水压试验18.84~23.55MPa", "水压试验压力为18.84MPa")
+    assert fact_covered("水压试验18.84~23.55MPa", "水压试验压力为23.55MPa")
+    assert not fact_covered("水压试验18.84~23.55MPa", "水压试验压力为20MPa")
+    assert not fact_covered("水压试验18.84~23.55MPa", "水压试验压力为30MPa")
+
+
+def test_citation_detects_numbered_reference_in_tail():
+    assert has_citation("过热器出口温度541℃，详见运行规程。[1]")
+    assert has_citation("过热器出口温度541℃[^1]")
+
+
+def test_citation_ignores_numbering_in_body():
+    body = "第一步检查支吊架（1），第二步缓慢升压。" + "升压过程中注意监视压力变化，" * 20
+    assert not has_citation(body)
+
+
+def test_citation_detects_book_title_and_clause():
+    assert has_citation("依据《600MW机组运行规程》4.2条执行。")
+    assert has_citation("根据 DL/T 1234 规定执行。")
+
+
+def test_evidence_cover_normalizes_units_and_spaces():
+    assert evidence_cover("18.84 MPa", ["…试验压力为18.84MPa…"]) == 1.0
+    assert evidence_cover("18.84 MPa", ["…试验压力为23.55MPa…"]) == 0.0
+
+
+def test_evidence_cover_fuzzy_clause():
+    assert evidence_cover("水压试验压力为18.84MPa", ["水压试验压力应为18.84MPa"]) == 1.0
+
+
+def test_cross_doc_uses_acceptable_chunks():
+    golden = GoldenItem(question_id="q1", question_type="multi_document",
+                        acceptable_chunks=["c2", "c3"])
+    chunks = [RetrievedChunk(chunk_id="c2", document_id="d1", rank=1),
+              RetrievedChunk(chunk_id="c3", document_id="d2", rank=2)]
+    assert cross_doc_coverage(golden, chunks) == 1

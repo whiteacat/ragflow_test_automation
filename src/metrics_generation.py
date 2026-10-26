@@ -9,7 +9,14 @@ import re
 from statistics import mean
 from typing import Dict, List, Optional
 
-from .textnorm import CELL_SEP, UNIT_ALIASES, normalize, polarity  # noqa: F401
+from .textnorm import (
+    CELL_SEP,
+    normalize,
+    num_matches,
+    numbers,
+    polarity,
+    range_endpoint_hit,
+)
 
 ABSTAIN_PATTERNS = [
     "无法回答", "没有找到", "未找到相关", "知识库中没有", "不确定", "建议咨询",
@@ -25,33 +32,35 @@ ABSTAIN_MISFIRE_RE = re.compile(r"不确定(度|性|因素|区间|分析|来源|
 
 ABSTAIN_LONG_CHARS = 200
 
-CITATION_PATTERNS = [
-    r"【[^】]{1,80}】", r"\[[^\]]{1,60}(pdf|docx|doc|条款|第.{1,10}条|页)\]",
-    r"来源[：:]", r"引用[：:]", r"chunk[_-]?[a-z0-9]+", r"doc[_-]?[a-z0-9]+",
-    r"\[ID[:：\s]*\d+\]",  # RAGFlow 默认引用标记 [ID:0]
+STRONG_CITATION_PATTERNS = [
+    r"【[^】]{1,80}】",
+    r"《[^》]{1,80}》",
+    r"[\w\-]+\.(?:pdf|docx?|xlsx?)",
+    r"\[[^\]]{1,60}(pdf|docx|doc|条款|第.{1,10}条|页)\]",
+    r"来源[：:]", r"引用[：:]",
+    r"chunk[_-]?[a-z0-9]+", r"doc[_-]?[a-z0-9]+",
+    r"\[ID[:：\s]*\d+\]",
+    r"(?:依据|根据|见|详见|参见)[^。；\n]{0,20}第?\d+(?:\.\d+)*(?:条|款|章|节)",
+    r"(?:GB|DL|NB)/?T?\s*\d{2,}",
 ]
+
+WEAK_CITATION_PATTERNS = [
+    r"\[\^?\d{1,3}(?:[,，\-–]\s*\d{1,3})*\]",
+    r"[（(]\d{1,2}[)）]",
+]
+
+CITATION_TAIL_CHARS = 200
 
 
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 _UNIT_RE = re.compile(r"(mpa|kpa|kgf|kn|kv|kw|mw|ma|r/min|t/h|n·m|nm|mm|℃|%|pa|v)")
 _FILLER_RE = re.compile(r"(两值均适用于|以上均适用于|均适用于|两值均|均适用|适用于|两值|均相同|相同|一致)")
-_LABEL_SPLIT = re.compile(r"[、，,；;：:/\u0001与和及]")
+_LABEL_SPLIT = re.compile(r"[、，,；;：:/\u0001与和及~]")
 _CELL_SEP = CELL_SEP
 
 
 def normalize_text(s: str) -> str:
     return normalize(s)
-
-
-def _num_key(token: str) -> str:
-    try:
-        return f"{float(token):.10g}"
-    except ValueError:
-        return token
-
-
-def _num_keys(text: str) -> set:
-    return {_num_key(t) for t in _NUM_RE.findall(text)}
 
 
 def _labels(text: str) -> List[str]:
@@ -71,6 +80,14 @@ def _spans(text: str, tokens: List[str]) -> List[tuple[int, int]]:
     return out
 
 
+def _numbers_covered(fact_norm: str, f_nums, a_nums) -> bool:
+    if not a_nums:
+        return False
+    if all(any(num_matches(fn, an) for an in a_nums) for fn in f_nums):
+        return True
+    return range_endpoint_hit(fact_norm, a_nums) is True
+
+
 def fact_covered(fact: str, answer: str) -> bool:
     """单条事实是否被答案覆盖：数值按 token 全匹配 + 标签词全部出现。
 
@@ -83,12 +100,12 @@ def fact_covered(fact: str, answer: str) -> bool:
         i = a.find(f)
         return polarity(a, i, i + len(f)) != "deny"
     labels = _labels(f)
-    nums = _num_keys(f)
-    if nums and not nums <= _num_keys(a):
+    f_nums = numbers(f)
+    if f_nums and not _numbers_covered(f, f_nums, numbers(a)):
         return False
     if not labels or not all(lbl in a for lbl in labels):
         return False
-    spans = _spans(a, labels + _NUM_RE.findall(f))
+    spans = _spans(a, labels + [n.raw for n in f_nums])
     return not any(polarity(a, s, e) == "deny" for s, e in spans)
 
 
@@ -166,7 +183,11 @@ def forbidden_hit(forbidden_facts: List[str], answer: str) -> Optional[int]:
 
 
 def has_citation(answer: str) -> bool:
-    return any(re.search(p, answer or "", re.IGNORECASE) for p in CITATION_PATTERNS)
+    text = answer or ""
+    if any(re.search(p, text, re.IGNORECASE) for p in STRONG_CITATION_PATTERNS):
+        return True
+    tail = text[-CITATION_TAIL_CHARS:]
+    return any(re.search(p, tail) for p in WEAK_CITATION_PATTERNS)
 
 
 def citation_complete(must_cite: bool, answer: str, answerable: bool = True,
