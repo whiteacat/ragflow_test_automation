@@ -201,12 +201,38 @@ python scripts/qa_single.py --config config/test.yaml --question "水冷壁超�
 # 类 Ragas 四指标（Context Precision/Recall、Faithfulness、Answer Relevancy，规则版下限）
 python scripts/ragas_like.py --per-question results/<experiment_id>/per_question.jsonl \
     --golden datasets/xlsx_golden.jsonl --k 5 --out /tmp/ragas.jsonl
+# 人工评审 xlsx：客观指标结果 + 主观指标逐题评分表 + 评分规则（详见下节）
+python scripts/export_review_xlsx.py \
+    --per-question results/<experiment_id>/per_question.jsonl \
+    --summary results/<experiment_id>/summary.json \
+    --out results/<experiment_id>/review.xlsx
 # 阈值校准：① 从跑批结果抽候选并预标 → ② 人工确认 → ③ 扫描阈值（详见下节）
 python scripts/make_calibration_set.py --per-question results/<experiment_id>/per_question.jsonl \
     --out datasets/calibration_candidates.jsonl --review-out datasets/calibration_review.jsonl
 python scripts/calibrate_thresholds.py --config config/test.yaml \
     --data datasets/calibration_candidates.jsonl --kind all --out results/calibration
 ```
+
+## 人工评审 xlsx
+
+主观指标（GEN-01/03/04/06/07/08、RAG-06/07、TRACE-02）无法纯规则判定，
+`export_review_xlsx.py` 把它们展开成逐题待评分行，附完整上下文和打分规则，
+输出 4 个 sheet 的 xlsx 供人工审查打分：
+
+| Sheet | 内容 | 用途 |
+|---|---|---|
+| **评分规则** | 全部指标（主观+客观）的口径、打分规则、方向、阈值、是否一票否决 | 参考手册 |
+| **人工评分表** | 逐题 × 主观指标：问题/参考答案/系统答案/检索证据/事实点/禁止事项 + 空白评分列 | **主表，人工填分** |
+| **客观指标结果** | 逐题自动计算指标（Top@k/MRR/NDCG/fact_recall/abstention 等） | 对照参考 |
+| **汇总** | 聚合指标 + 阈值判定（需 `--summary`） | 总览 |
+
+人工评分表列说明：
+- **绿底**（输入）：问题、参考答案、必须覆盖事实、禁止事项、检索证据 — 评审依据
+- **黄底**（输出）：系统答案 — 待评审对象
+- **橙底**（人工填写）：人工评分（下拉选择，如 0/1/2）、评分理由
+
+打分规则（以 GEN-01 为例）：`0=错误或关键事实错误；1=基本正确但缺次要信息；2=正确完整`。
+GEN-08 仅对步骤/事故类题型展开，RAG-06 仅对 `must_cite=true` 的题展开。
 
 ## 判定口径与阈值校准
 
