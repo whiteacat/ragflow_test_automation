@@ -49,7 +49,7 @@ def assist(golden_path: str, cfg_path: str, out: str, topn: int) -> None:
     ds = list(rag.get("dataset_ids") or [])
     total = sum(1 for line in open(golden_path, encoding="utf-8")
                 if line.strip() and json.loads(line).get("needs_chunk_mapping"))
-    n, failed = [], []
+    n, failed = 0, []
     done_i = 0
     with open(out, "w", encoding="utf-8") as f:
         for line in open(golden_path, encoding="utf-8"):
