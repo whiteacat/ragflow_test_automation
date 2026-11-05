@@ -110,6 +110,7 @@ def main() -> int:
     with open(args.config, encoding="utf-8") as f:
         _cfg = yaml.safe_load(f) or {}
     EXP_DIR = exp_dir_from_config(_cfg)
+    os.makedirs(EXP_DIR, exist_ok=True)
     print(f"运行目录：{EXP_DIR}")
 
     golden = args.golden
@@ -132,7 +133,8 @@ def main() -> int:
             print("转换产物比 xlsx 新，跳过转换（加 --reimport 强制重转；"
                   "注意重转会丢失已应用的 Chunk 映射）。")
 
-    if not step("S0", "0. 校验问答集", PY, "scripts/validate_dataset.py", golden):
+    if not step("S0", "0. 校验问答集", PY, "scripts/validate_dataset.py", golden,
+                "--warn-jsonl", os.path.join(EXP_DIR, "dataset_warnings.jsonl")):
         return 1
     step("S0", "0b. 覆盖率", PY, "scripts/coverage_check.py", golden)
 

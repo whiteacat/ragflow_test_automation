@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -42,7 +43,7 @@ def lint_answer_points(points, qid: str, warns: list) -> None:
         warns.append(f"{qid}: {len(bare)} 个事实点只有数值无中文标签，换表述即无法定位，如 {bare[0]!r}")
 
 
-def main(path: str) -> int:
+def main(path: str, warn_jsonl: str = "") -> int:
     n, errs, warns = 0, [], []
     seen = set()
     types, risks, stages = Counter(), Counter(), Counter()
@@ -120,6 +121,13 @@ def main(path: str) -> int:
                     warns.append(f"{qid}: 高风险题缺 mandatory_points/expected_answer_points（§3-5 逐条复核）")
             if d.get("answerable", True) and d.get("expected_answer_points"):
                 lint_answer_points(d["expected_answer_points"], qid, warns)
+    if warn_jsonl and warns:
+        os.makedirs(os.path.dirname(os.path.abspath(warn_jsonl)) or ".", exist_ok=True)
+        with open(warn_jsonl, "w", encoding="utf-8") as f:
+            for w in warns:
+                qid, _, msg = w.partition(": ")
+                f.write(json.dumps({"question_id": qid, "message": msg},
+                                   ensure_ascii=False) + "\n")
     print(f"共 {n} 题；题型 {dict(types)}；风险 {dict(risks)}；阶段 {dict(stages)}")
     for w in warns:
         print(" !", w)
@@ -133,4 +141,10 @@ def main(path: str) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "datasets/golden_sample.jsonl"))
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("path", nargs="?", default="datasets/golden_sample.jsonl")
+    ap.add_argument("--warn-jsonl", default="",
+                    help="把告警写成 jsonl（供 suite.xlsx「异常与复核」读取）")
+    a = ap.parse_args()
+    sys.exit(main(a.path, a.warn_jsonl))

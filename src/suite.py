@@ -32,9 +32,10 @@ MANIFEST = "pipeline_stages.jsonl"
 
 
 def exp_dir_from_config(cfg: Dict[str, Any], root: str = ".") -> str:
-    """与 src/runner.py 的产物目录口径保持一致。"""
-    out = cfg.get("output_dir", "results")
-    exp = cfg.get("experiment_id", "exp")
+    """与 src/runner.py 的产物目录口径保持一致（run 段优先）。"""
+    run = cfg.get("run") or {}
+    out = run.get("output_dir", cfg.get("output_dir", "results"))
+    exp = run.get("experiment_id", cfg.get("experiment_id", "exp"))
     return os.path.join(root, out, str(exp))
 
 
@@ -165,6 +166,7 @@ ARTIFACTS = {
     "summary": "summary.json",
     "parse_summary": "parse_summary.json",
     "parse_anomalies": "parse_anomalies.jsonl",
+    "dataset_warnings": "dataset_warnings.jsonl",
     "review_queue": "review_queue.jsonl",
     "review_scores": "review_scores.jsonl",
     "report": "report.md",

@@ -8,6 +8,7 @@ from src.suite import (
     aggregate_subjective,
     collect,
     existing_scores,
+    exp_dir_from_config,
     latest_stages,
     load_stages,
     record,
@@ -37,6 +38,12 @@ def _rows():
             "question_id": "CIT-001", "scenario_id": "SCN-001", "test_stage": "qa",
             "question_type": "param", "question": "水压试验多大压力？",
             "golden_answer": "18.84MPa", "predicted_answer": "",
+        },
+        {
+            "question_id": "ANS-002", "scenario_id": "SCN-002", "test_stage": "qa",
+            "question_type": "param", "question": "润滑油压动作值？",
+            "golden_answer": "0.082/0.076MPa", "predicted_answer": "未找到",
+            "needs_chunk_mapping": True, "Top@5": None,
         },
     ]
 
@@ -117,8 +124,19 @@ def test_build_creates_all_sheets_and_keeps_scores(tmp_path):
     assert existing_scores(out)[("ANS-001", "GEN-01")] == (2, "完整")
 
 
+def test_exp_dir_reads_run_section(tmp_path):
+    cfg = {"run": {"output_dir": "out", "experiment_id": "exp_full_84"},
+           "output_dir": "ignored", "experiment_id": "ignored"}
+    assert exp_dir_from_config(cfg, str(tmp_path)) == str(
+        tmp_path / "out" / "exp_full_84")
+
+
 def test_issues_sheet_lists_errors_and_empty_answers(tmp_path):
     exp = _write_run(tmp_path)
+    with open(os.path.join(exp, "dataset_warnings.jsonl"), "w", encoding="utf-8") as f:
+        f.write(json.dumps({"question_id": "ANS-002",
+                            "message": "1 个事实点含多个数值"},
+                           ensure_ascii=False) + "\n")
     out = os.path.join(exp, "suite.xlsx")
     build(exp, out)
     from openpyxl import load_workbook
@@ -127,3 +145,5 @@ def test_issues_sheet_lists_errors_and_empty_answers(tmp_path):
                      for row in ws.iter_rows())
     assert "RET-001" in text and "运行异常" in text
     assert "CIT-001" in text and "空答案" in text
+    assert "ANS-002" in text and "无Chunk映射" in text
+    assert "1 个事实点含多个数值" in text

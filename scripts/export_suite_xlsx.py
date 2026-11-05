@@ -263,6 +263,15 @@ def sheet_issues(wb: Workbook, data: Dict[str, Any]):
             ws.append(["空答案", r.get("question_id"), "predicted_answer 为空，需查 chat 接口",
                        "per_question"])
 
+    for r in data["per_question"]:
+        if r.get("needs_chunk_mapping") and r.get("Top@5") is None:
+            ws.append(["无Chunk映射", r.get("question_id"),
+                       "needs_chunk_mapping=true 但 gold chunk 为空，检索指标未计分",
+                       "per_question"])
+
+    for row in data.get("dataset_warnings", []):
+        ws.append(["数据集告警", row.get("question_id", ""),
+                   row.get("message", ""), "dataset_warnings.jsonl"])
     for row in data["parse_anomalies"]:
         ws.append(["解析异常", row.get("doc_name", ""),
                    json.dumps(row, ensure_ascii=False)[:500], "parse_anomalies.jsonl"])
