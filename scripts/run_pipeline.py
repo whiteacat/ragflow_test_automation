@@ -23,9 +23,40 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, ROOT)
 PY = sys.executable
+
+from src.suite import exp_dir_from_config, record  # noqa: E402
+
+EXP_DIR = ""  # main() 按 config 的 output_dir/experiment_id 设置
+
+
+def mark(stage: str, status: str, elapsed: float, note: str = "",
+         artifact: str = "") -> None:
+    """把阶段结果写进 results/<exp>/pipeline_stages.jsonl，供 S6 汇总。"""
+    if EXP_DIR:
+        record(EXP_DIR, stage, status, elapsed, artifact=artifact, note=note)
+
+
+def step(stage: str, title: str, *cmd: str) -> bool:
+    t0 = time.time()
+    ok = sh(title, *cmd)
+    mark(stage, "ok" if ok else "fail", time.time() - t0, title)
+    return ok
+
+
+def step_capture(stage: str, title: str, *cmd: str) -> tuple:
+    t0 = time.time()
+    ok, out = sh_capture(title, *cmd)
+    mark(stage, "ok" if ok else "fail", time.time() - t0, title)
+    return ok, out
+
+
+def skip(stage: str, note: str) -> None:
+    mark(stage, "skip", 0.0, note)
 
 
 def sh(step: str, *cmd: str) -> bool:
@@ -74,60 +105,75 @@ def main() -> int:
     ap.add_argument("--skip-export", action="store_true")
     args = ap.parse_args()
 
+    global EXP_DIR
+    import yaml  # noqa: E402
+    with open(args.config, encoding="utf-8") as f:
+        _cfg = yaml.safe_load(f) or {}
+    EXP_DIR = exp_dir_from_config(_cfg)
+    print(f"运行目录：{EXP_DIR}")
+
     golden = args.golden
     baseline = args.baseline
     ok = True
 
-    if not args.skip_import and args.xlsx and os.path.exists(args.xlsx):
+    if args.skip_import:
+        skip("S0", "指定 --skip-import")
+    elif args.xlsx and os.path.exists(args.xlsx):
         fresh = (not os.path.exists(golden) or not os.path.exists(baseline)
                  or os.path.getmtime(args.xlsx) > min(os.path.getmtime(golden),
                                                       os.path.getmtime(baseline)))
         if args.reimport or fresh:
-            if not sh("00. 转换xlsx", PY, "scripts/import_xlsx_cases.py",
-                      "--xlsx", args.xlsx, "--out-golden", golden,
-                      "--out-baseline", baseline):
+            if not step("S0", "00. 转换xlsx", PY, "scripts/import_xlsx_cases.py",
+                        "--xlsx", args.xlsx, "--out-golden", golden,
+                        "--out-baseline", baseline):
                 return 1
         else:
+            skip("S0", "转换产物比 xlsx 新，跳过（--reimport 强制重转）")
             print("转换产物比 xlsx 新，跳过转换（加 --reimport 强制重转；"
                   "注意重转会丢失已应用的 Chunk 映射）。")
 
-    if not sh("0. 校验问答集", PY, "scripts/validate_dataset.py", golden):
+    if not step("S0", "0. 校验问答集", PY, "scripts/validate_dataset.py", golden):
         return 1
-    sh("0b. 覆盖率", PY, "scripts/coverage_check.py", golden)
+    step("S0", "0b. 覆盖率", PY, "scripts/coverage_check.py", golden)
 
-    if not args.skip_parse:
+    if args.skip_parse:
+        skip("S1", "指定 --skip-parse")
+    else:
         cmd = [PY, "scripts/parse_benchmark.py", "--baseline", baseline,
                "--config", args.config]
         if args.dataset_id:
             cmd += ["--dataset-id", args.dataset_id]
         if args.document_id:
             cmd += ["--document-id", args.document_id]
-        if not sh("1. 解析+切分", *cmd):
+        if not step("S1", "1. 解析+切分", *cmd):
             print("提示：解析需 RAGFlow 已入库且配置 document-id，跳过继续。")
-    if not args.skip_mapping:
+    if args.skip_mapping:
+        skip("S2", "指定 --skip-mapping")
+    else:
         apply_path = args.apply_mapping
         if args.auto_map:
             apply_path = apply_path or os.path.join(
                 "/tmp", f"mapping_auto_{args.batch}.jsonl")
-            if not sh("2a. 证据对齐自动映射", PY, "scripts/assist_chunk_mapping.py",
-                      "--auto-map", apply_path, "--golden", golden,
-                      "--config", args.config, "--threshold", str(args.map_threshold)):
+            if not step("S2", "2a. 证据对齐自动映射", PY,
+                        "scripts/assist_chunk_mapping.py",
+                        "--auto-map", apply_path, "--golden", golden,
+                        "--config", args.config, "--threshold", str(args.map_threshold)):
                 return 1
         if apply_path:
-            if not sh("2. 应用Chunk映射", PY, "scripts/assist_chunk_mapping.py",
-                      "--apply", apply_path,
-                      "--in-golden", golden, "--out-golden", golden):
+            if not step("S2", "2. 应用Chunk映射", PY,
+                        "scripts/assist_chunk_mapping.py",
+                        "--apply", apply_path,
+                        "--in-golden", golden, "--out-golden", golden):
                 return 1
         else:
-            sh("2. 生成Chunk候选（人工确认后下次加 --apply-mapping）",
-               PY, "scripts/assist_chunk_mapping.py", "--golden", golden,
-               "--config", args.config, "--out", "/tmp/chunk_candidates.jsonl")
-    if not sh("3. 健康检查", PY, "scripts/health_check.py", "--config", args.config):
+            step("S2", "2. 生成Chunk候选（人工确认后下次加 --apply-mapping）",
+                 PY, "scripts/assist_chunk_mapping.py", "--golden", golden,
+                 "--config", args.config, "--out", "/tmp/chunk_candidates.jsonl")
+    if not step("S3", "3. 健康检查", PY, "scripts/health_check.py",
+                "--config", args.config):
         print("服务不通，后续在线步骤将失败，如需只做离线校验请 Ctrl-C。")
 
-    import yaml  # noqa: E402
-    with open(args.config, encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = dict(_cfg)
     cfg.setdefault("run", {})["dataset"] = golden
     run_cfg = args.config
     if args.stages:
@@ -139,8 +185,8 @@ def main() -> int:
     run_cfg = tmp.name
     print(f"本次问答集：{golden}"
           + (f"，环节子集：{args.stages}" if args.stages else "（全环节）"))
-    run_ok, run_out = sh_capture("4. 全链路执行", PY, "scripts/run_all.py",
-                                 "--config", run_cfg)
+    run_ok, run_out = step_capture("S4", "4. 全链路执行", PY, "scripts/run_all.py",
+                                   "--config", run_cfg)
     if not run_ok:
         ok = False
         print("第 4 步失败：跳过写回，避免旧数据套新批次号；修好服务/配置后重跑。")
@@ -150,15 +196,18 @@ def main() -> int:
         pass
 
     out_dir = report_dir_from_output(run_out)
-    if args.judge and out_dir and os.path.exists(
+    if not args.judge:
+        skip("S5", "未指定 --judge")
+    elif out_dir and os.path.exists(
             os.path.join(ROOT, out_dir, "review_prompts.jsonl")):
         cmd = [PY, "scripts/judge_review.py", "--dir", out_dir,
                "--config", args.config]
         if args.judge_tasks:
             cmd += ["--tasks"] + args.judge_tasks
-        if not sh("4b. LLM 复核", *cmd):
+        if not step("S5", "4b. LLM 复核", *cmd):
             print("提示：复核失败不影响已有规则分；修好 judge 配置后可单独重跑本步。")
-    elif args.judge:
+    else:
+        skip("S5", "第 4 步无 review_prompts.jsonl，跳过 LLM 复核")
         print("提示：第 4 步无产物，跳过 LLM 复核。")
 
     if ok and not args.skip_export and os.path.exists(args.xlsx):
@@ -179,16 +228,32 @@ def main() -> int:
             else:
                 print("跳过写回：找不到任何 per_question.jsonl（第 4 步无产物）。")
         if perq:
-            sh("5. 写回执行记录", PY, "scripts/export_xlsx_record.py",
-               "--xlsx", args.xlsx, "--per-question", perq,
-               "--summary", summ, "--batch", args.batch,
-               "--tester", args.tester)
+            step("S6", "5a. 写回业务xlsx", PY, "scripts/export_xlsx_record.py",
+                 "--xlsx", args.xlsx, "--per-question", perq,
+                 "--summary", summ, "--batch", args.batch,
+                 "--tester", args.tester)
+        else:
+            skip("S6", "无 per_question.jsonl，跳过业务 xlsx 写回")
     elif not ok:
+        skip("S6", "第 4 步失败，跳过业务 xlsx 写回")
         print("跳过写回：第 4 步失败（见上），无本次产物可写。")
     elif args.skip_export:
+        skip("S6", "指定 --skip-export")
         print("跳过写回：指定了 --skip-export。")
     elif not os.path.exists(args.xlsx):
+        skip("S6", "找不到业务 xlsx")
         print(f"跳过写回：找不到 {args.xlsx}。")
+
+    # S6 收口：无论前面成败，只要有产物就汇成一份 suite.xlsx（过程留痕）
+    if os.path.isdir(EXP_DIR) and os.path.exists(
+            os.path.join(EXP_DIR, "pipeline_stages.jsonl")):
+        if step("S6", "6. 汇总结果xlsx", PY, "scripts/export_suite_xlsx.py",
+                "--dir", EXP_DIR, "--config", args.config,
+                "--batch", args.batch):
+            print(f"单一交付物：{os.path.join(EXP_DIR, 'suite.xlsx')}")
+    else:
+        skip("S6", "无运行产物，跳过 suite.xlsx")
+
     print("\n流水线结束：" + ("全部成功" if ok else "执行有失败，见上"))
     return 0 if ok else 1
 

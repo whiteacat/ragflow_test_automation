@@ -48,6 +48,4 @@ config/test.yaml
 *.tar.gz
 /企业RAG测试集构建要求_600MW规程案例.docx
 /企业RAG全环节测试集_600MW.xlsx
-/docs/TESTSET_BUILD.md
 企业RAG全环节测试集_600MW_执行记录_exp_local_003.xlsx
-/docs/指标计算逻辑与算法.md

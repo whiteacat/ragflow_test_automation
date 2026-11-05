@@ -82,9 +82,21 @@ python scripts/run_pipeline.py --config config/test.yaml \
     --skip-import --skip-parse --skip-mapping --skip-export --batch SMOKE-8
 ```
 
-## 完整测试流程
+## 完整测试流程（主线 S0~S6）
 
-一键流水线（校验 → 解析 → 映射 → 全链路 → 写回，缺条件自动跳过）：
+一条命令、固定 7 个阶段，缺条件自动跳过，**每个阶段的结果都写进
+`results/<exp>/pipeline_stages.jsonl`，最后汇成唯一交付物 `results/<exp>/suite.xlsx`**
+（`运行信息 / 流程记录 / 指标汇总 / 逐题结果 / 人工评分表 / 评分规则 / 异常与复核`）。
+
+| 阶段 | 动作 | 主要产物 | 缺条件时 |
+|---|---|---|---|
+| **S0 数据准备** | xlsx → golden/baseline + 字段校验 + 覆盖率 | `datasets/xlsx_golden.jsonl` 等 | `--skip-import` 跳过转换 |
+| **S1 解析评测** | `parse_benchmark` | `parse_summary.json` / `parse_anomalies.jsonl` | `--skip-parse` 或未配 `document_id` |
+| **S2 Chunk映射** | 候选导出 → 人工勾选 → 写回 | golden 内 `expected_chunk` | `--skip-mapping` |
+| **S3 环境检查** | `health_check` 探活 | 终端输出 | 服务不通时提示继续 |
+| **S4 全链路运行** | `run_all`：召回/重排/回答/引用/拒答 | `per_question.jsonl` / `summary.json` / `report.md` | 失败则后续写回跳过 |
+| **S5 复核** | `judge_review`（可选） | `review_scores.jsonl` | 未加 `--judge` 记 skip |
+| **S6 结果归档** | 业务 xlsx 写回 + **suite.xlsx** | `suite.xlsx`（唯一汇总交付物） | 有产物就照常收口 |
 
 ```bash
 python scripts/run_pipeline.py --config config/test.yaml \
@@ -94,6 +106,18 @@ python scripts/run_pipeline.py --config config/test.yaml \
 # 换数据集：--golden datasets/golden_sample.jsonl --baseline datasets/parse_golden_sample.jsonl
 # 解析覆盖：--dataset-id KB --document-id DOC；强制重转：--reimport（会丢失已应用映射）
 ```
+
+`suite.xlsx` 也可单独重生成（不跑测试，只重排已有产物；**已填的人工评分会原样保留**）：
+
+```bash
+python scripts/export_suite_xlsx.py --dir results/exp_full_84 \
+    --config config/test.yaml --batch EXP-084
+# 人工评分写在「人工评分表」sheet，填完重跑本命令即可在「指标汇总」看到主观聚合
+# 不会丢分：脚本按（题目编号, 指标编号）读回旧文件里的 人工评分/评分理由 再写回
+```
+
+> S6 即使前面阶段失败也会执行（只要有 `pipeline_stages.jsonl`），失败原因留在「流程记录」，
+> 这样一次运行的过程是连续的、可追溯的，不需要翻终端日志。
 
 各步骤也可单独执行：
 
