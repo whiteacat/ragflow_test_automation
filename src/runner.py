@@ -41,6 +41,21 @@ def _retrieve_with(client: RAGFlowClient, question: str, dataset_ids, ret_cfg: d
     return client.retrieve(question, dataset_ids, **kw)
 
 
+def chunk_evidence(chunks) -> tuple[str, List[Dict[str, Any]]]:
+    """前 10 条证据的两种落盘形式：人看文本 + 机读分数。"""
+    top = chunks[:10]
+    snippet = "\n".join(
+        f"[{c.rank}] score={c.score:.4f} {c.document_name}#{c.chunk_id}: {c.content[:300]}"
+        for c in top)
+    scores = [
+        {"rank": c.rank, "chunk_id": c.chunk_id, "score": round(c.score, 4),
+         "vector_similarity": c.metadata.get("vector_similarity"),
+         "term_similarity": c.metadata.get("term_similarity")}
+        for c in top
+    ]
+    return snippet, scores
+
+
 def load_golden(path: str, limit=None) -> List[Dict[str, Any]]:
     items = []
     with open(path, encoding="utf-8") as f:
@@ -153,6 +168,7 @@ def run(cfg_path: str) -> Dict[str, Any]:
         elif rerank_cmp is not None:
             print(f"警告 {item.question_id}：rerank_compare 须为 [关闭值, 开启值] 两元，"
                   f"当前 {rerank_cmp} 已忽略")
+        snippet, r_scores_list = chunk_evidence(chunks)
         row.update({
             "question_type": item.question_type,
             "paraphrase_group": item.paraphrase_group,
@@ -165,9 +181,8 @@ def run(cfg_path: str) -> Dict[str, Any]:
             "evidence_recall@10": evidence_recall_at_k(
                 item.evidence_text, chunks, 10),
             "retrieval_latency_ms": ret["latency_ms"],
-            "evidence_snippet": "\n".join(
-                f"[{c.rank}] {c.document_name}#{c.chunk_id}: {c.content[:300]}"
-                for c in chunks[:10]),
+            "evidence_snippet": snippet,
+            "retrieval_scores": r_scores_list,
         })
         # --- 生成（全链路） ---
         if not retrieval_only:
